@@ -171,18 +171,13 @@ class WarehouseEnv:
         self.items = {}  # 商品字典
         self.area_ids = []  # 仓库区域编号列表
         self.pick_points_area = {}  # 每个区域的拣货位列表字典
-        # 仓库中的机器人和拣货员对象信息
-        self.robots = []  # 机器人列表
-        self.pickers = []  # 拣货员列表
-        self.pickers_list = []  # 截止目前实例化的拣货员列表
-        self.robots_list = []  # 截止目前实例化的机器人对象列表
         # 构建仓库图
         self.create_warehouse_graph()
-        # 初始化每个区域的拣货员列表字典
-        self.pickers_area = {area_id: [] for area_id in self.area_ids}  # 每个区域的拣货员列表字典
+
         # 为仓库调整机器人数量和每个区域调整拣货员数量
-        self.adjust_npickers_dict = {area_id: None for area_id in self.area_ids}  # 每个区域初始拣货员数量
-        self.adjust_nrobots = None  # 仓库中初始机器人数量
+        self.adjust_pickers_dict = {area_id: None for area_id in self.area_ids}  # 每个区域初始拣货员数量
+        self.adjust_robots = None  # 仓库中初始机器人数量
+
         # 仓库强化学习环境属性
         self.state = None  # 当前状态
         self.action = None  # 当前动作
@@ -190,12 +185,21 @@ class WarehouseEnv:
         self.reward = None  # 当前奖励
         self.total_reward = 0  # 累计奖励
         self.done = False  # 是否结束标志
-        # 仓库仿真环境时钟和订单对象属性
         self.current_time = 0  # 当前时间
-        self.orders = []  # 已到达订单列表
-        self.completed_orders = []  # 已拣选完成订单列表
-        self.unpicked_orders = []  # 未拣选完成的订单列表
+
+        # 仓库中的机器人对象信息
+        self.pickers = []  # 拣货员列表
+        self.pickers_list = []  # 截止目前实例化的拣货员列表
+        self.pickers_area = {area_id: [] for area_id in self.area_ids}  # 每个区域的拣货员列表字典
+        # 仓库中的拣货员对象信息
+        self.robots = []  # 机器人列表
+        self.robots_list = []  # 截止目前实例化的机器人对象列表
         self.robots_at_depot = []  # depot_position位置的机器人列表
+        self.robots_assigned = []  # 已分配订单的机器人列表
+        # 仓库仿真环境时钟和订单对象属性
+        self.orders = []  # 已到达订单列表
+        self.orders_completed = []  # 已拣选完成订单列表
+        self.orders_uncompleted = []  # 未拣选完成的订单列表
 
     def create_warehouse_graph(self):
         # 创建仓库图, 包括货架、巷道、储货位和商品
@@ -313,8 +317,8 @@ class WarehouseEnv:
         # 重置仓库仿真环境时钟和订单对象属性
         self.current_time = 0  # 当前时间
         self.orders = []  # 已到达订单列表
-        self.completed_orders = []  # 已拣选完成订单列表
-        self.unpicked_orders = []  # 未拣选完成的订单列表
+        self.orders_completed = []  # 已拣选完成订单列表
+        self.orders_uncompleted = []  # 未拣选完成的订单列表
         self.robots_at_depot = []  # depot_position位置的机器人列表
         # 提取初始状态
         self.state = self.state_extractor()
@@ -324,18 +328,24 @@ class WarehouseEnv:
         """
         仓库环境的仿真步进函数：每个决策点执行一次step()函数。
         决策点：时钟移动到每天的开始时刻时。
-        离散点：每个订单到达时刻、拣货员空闲时刻、机器人空闲时刻、机器人移动到新的拣货点时刻、机器人移动到depot_position释放订单时刻。
+        离散点：新订单到达时刻、拣货员空闲时刻、机器人移动到拣货点时刻，机器人空闲时刻。
         action: 每天的开始时刻机器人和各区域内拣货员的调整值。
         """
-        self.adjust_nrobots = action[0]  # 动作调整的机器人数量
-        self.adjust_npickers_dict = {area_id: action[i] for i, area_id in enumerate(self.area_ids, start=1)}  # 动作调整的每个区域的拣货员数量
+        self.adjust_robots = action[0]  # 动作调整的机器人数量
+        self.adjust_pickers_dict = {area_id: action[i] for i, area_id in enumerate(self.area_ids, start=1)}  # 动作调整的每个区域的拣货员数量
         # 执行动作，调整仓库中的机器人和拣货员数量
-        self.adjust_robots_and_pickers(self.adjust_nrobots, self.adjust_npickers_dict)
+        self.adjust_robots_and_pickers(self.adjust_robots, self.adjust_pickers_dict)
         # 一天的仿真时间
         one_day = 24 * 3600
-        #
-
-
+        # 初始时间
+        start_time = self.current_time
+        # 结束时间
+        end_time = self.current_time + one_day
+        while self.current_time < end_time:  # 当前时间小于结束时间时
+            # 判断是否移动时钟
+            # 若当前离散点[新订单到达时刻，拣货员拣货完成时刻，机器人移动到拣货点时刻，机器人空闲时刻]中的最小值大于当前时间时，则移动时钟到下一个离散点时刻
+            # 若当前离散点某个区域同时存在空闲拣货员和待分配拣货员的拣货位时，则时钟保持不动。并执行拣货员分配动作，直到每个区域不同时存在空闲拣货员和待分配拣货员的拣货位时
+            pass
         pass
 
     def state_extractor(self):
@@ -356,33 +366,33 @@ class WarehouseEnv:
         """计算当前奖励"""
         pass
 
-    # 当前决策点空闲机器人列表
+    # 当前离散点空闲机器人列表
     @ property
     def idle_robots(self):
         return [robot for robot in self.robots if robot.state == 'idle']
 
-    # 当前决策点每个区域的空闲拣货员列表
+    # 当前离散点每个区域的空闲拣货员列表
     @ property
     def idle_pickers(self):
         # 每个区域的空闲拣货员列表字典
         idle_pickers_area = {area_id: [picker for picker in self.pickers_area[area_id] if picker.state == 'idle'] for area_id in self.area_ids}
         return idle_pickers_area
 
-    # 当前决策点每个区域待分配拣货员的拣货位列表
+    # 当前离散点每个区域待分配拣货员的拣货位列表
     @ property
     def idle_pick_points(self):
         # 每个区域待分配拣货员的拣货位列表字典
         idle_pick_points_area = {area_id: [point for point in self.pick_points_area[area_id] if point.is_idle] for area_id in self.area_ids}
         return idle_pick_points_area
 
-    # 当前决策点每个拣货位未拣货商品数量（基于未拣货完成订单中的未拣货完成商品计算对应拣货位的未拣货商品数量）
+    # 当前离散点每个拣货位未拣货商品数量（基于未拣货完成订单中的未拣货完成商品计算对应拣货位的未拣货商品数量）
     @ property
     def pick_point_unpicked_items(self):
         # 重置拣货位中的未拣货商品列表
         for point in self.pick_points.values():
             point.unpicked_items = []
         # 计算拣货位中的未拣货商品数量
-        for order in self.unpicked_orders:
+        for order in self.orders_uncompleted:
             for item in order.unpicked_items:
                 pick_point_id = item.pick_point_id
                 self.pick_points[pick_point_id].unpicked_items.append(item)
