@@ -25,6 +25,7 @@ def create_warehouse_graph(N_l, N_w, S_l, S_w, S_b, S_d, S_a):
             G.add_edge((x, y1), (x, y2))
     return G
 
+
 # 仓库参数
 N_l = 10  # 单个货架中储货位的数量，这里假设是10个储货位
 N_w = 6  # 巷道的数量，这里假设是5个巷道，每个巷道两侧各有一个货架，共12个货架
