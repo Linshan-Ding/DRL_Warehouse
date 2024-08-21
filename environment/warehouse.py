@@ -8,7 +8,7 @@ import copy
 import os
 import sys
 import math
-
+import pickle
 
 class Order:
     def __init__(self, order_id, items, arrive_time=0):
@@ -19,7 +19,7 @@ class Order:
         # 单位拣选时间成本
         self.unit_time_cost = 1
         # 订单中的未拣选完成的商品列表
-        self.unpicked_items = copy.deepcopy(self.items)
+        self.unpicked_items = items
         # 订单中的已拣选完成的商品列表
         self.picked_items = []
 
@@ -91,10 +91,9 @@ class Robot:
         self.unit_time_cost = 1  # 机器人工作单位时间成本
         self.item = None  # 机器人待拣选或正在拣选的商品
         self.item_pick_complete_time = 0  # 机器人的当前商品拣货完成时间
-        # 机器人移动到拣货位的时间
-        self.move_to_pick_point_time = 0
-        # 机器人移动到depot_position的时间
-        self.move_to_depot_time = 0
+        self.move_to_pick_point_time = 0  # 机器人移动到拣货位的时间
+        self.move_to_depot_time = 0  # 机器人移动到depot_position的时间
+        self.working_time = 0  # 机器人工作时间
 
     def assign_order(self, order):
         """为机器人分配订单"""
@@ -138,7 +137,7 @@ class Picker:
 # 步进函数step()实现仓库环境的仿真
 # 动作为每间隔24个小时调整每个区域的拣货员和仓库中总的机器人的数量
 class WarehouseEnv:
-    def __init__(self, N_l, N_w, S_l, S_w, S_b, S_d, S_a, depot_position):
+    def __init__(self, N_l, N_w, S_l, S_w, S_b, S_d, S_a, are_dict, are_ids, depot_position):
         # 仓库环境参数
         self.N_l = N_l  # 单个货架中储货位的数量
         self.N_w = N_w  # 巷道的数量
@@ -147,15 +146,16 @@ class WarehouseEnv:
         self.S_b = S_b  # 底部通道的宽度
         self.S_d = S_d  # 仓库的出入口处的宽度
         self.S_a = S_a  # 巷道的宽度
-        self.N_w_area = 3  # 仓库中每个区域包含的巷道数量
+        self.area_ids = are_ids  # 仓库区域编号列表
+        self.area_dict = are_dict  # 仓库区域字典
         self.depot_position = depot_position  # 机器人的起始位置
+        self.total_time = None  # 仿真总时间
 
         # 仓库固定属性
         self.pick_points = {}  # 拣货位字典
         self.storage_bins = {}  # 储货位字典
         self.items = {}  # 商品字典
-        self.area_ids = []  # 仓库区域编号列表
-        self.pick_points_area = {}  # 每个区域的拣货位列表字典
+        self.pick_points_area = {area_id: [] for area_id in self.area_ids}  # 每个区域的拣货位列表字典
         self.depot_object = Depot(depot_position)  # 仓库起始点对象
         # 构建仓库图
         self.create_warehouse_graph()
@@ -186,14 +186,22 @@ class WarehouseEnv:
         self.orders_unassigned = []  # 已到达但未分配机器人的订单对象列表
         self.orders_uncompleted = []  # 未拣选完成的订单对象列表
 
+    # 根据nw确定巷道所处的仓库区域编号函数: 结合self.area_dict字典计算巷道所处的区域编号
+    def area_id(self, nw):
+        nw_sum = 0  # 计算巷道所处的区域数字标识
+        for area_id, area in self.area_dict.items():
+            nw_sum += area
+            if nw <= nw_sum:
+                return area_id
+            else:
+                continue
+        return print("巷道所处的区域编号计算错误！")
+
     def create_warehouse_graph(self):
         # 创建仓库图, 包括货架、巷道、储货位和商品
         for nw in range(1, self.N_w + 1):
-            # 计算该巷道所处的区域数字标识
-            id = math.ceil(nw / self.N_w_area)
-            area_id = "area" + str(id)
-            self.pick_points_area[area_id] = []  # 初始化每个区域的拣货位列表
-            self.area_ids.append(area_id)  # 将区域编号加入到区域编号列表中
+            # 计算该巷道nw所处的区域数字标识
+            area_id = self.area_id(nw)
             for nl in range(1, self.N_l + 1):
                 x = self.S_d + (2 * nw - 1) * self.S_w + (2 * nw - 1) / 2 * self.S_a
                 y = self.S_b + (2 * nl - 1) / 2 * self.S_l
@@ -302,7 +310,7 @@ class WarehouseEnv:
         self.current_time = 0  # 当前时间
         self.orders = orders  # 整个仿真过程所有订单对象列表
         self.orders_not_arrived = orders  # 未到达的订单对象列表
-        self.orders_unassigned = []  # 未分配机器人的订单对象列表
+        self.orders_unassigned = []  # 已到达未分配机器人的订单对象列表
         self.orders_uncompleted = []  # 未拣选完成的订单对象列表
         self.robots_at_depot = []  # depot_position位置的机器人列表
         # 提取初始状态
@@ -322,9 +330,7 @@ class WarehouseEnv:
         self.adjust_robots_and_pickers(self.adjust_robots, self.adjust_pickers_dict)
         # 一天的仿真时间
         one_day = 24 * 3600
-        # 当前step开始时间
-        start_time = self.current_time
-        # 结束时间
+        # 当前step结束时间
         end_time = self.current_time + one_day
 
         # 仿真该step: 从当前时间到下一个决策点
@@ -334,7 +340,6 @@ class WarehouseEnv:
 
             # 若某个区域同时存在空闲拣货员和待分配拣货员的拣货位，则为拣货员分配拣货位
             for area_id in self.area_ids:
-                # 当前区域同时存在空闲拣货员和待分配拣货员的拣货位时
                 self.assign_pick_point_to_picker(area_id)
 
             # 选择下一个离散点时刻
@@ -347,23 +352,31 @@ class WarehouseEnv:
             robots_move_to_depot_time = [robot.move_to_depot_time for robot in self.robots]  # 所有机器人移动到depot_position时刻
             # 所有离散时刻
             discrete_times = ([new_order_arrival_time] + pickers_pick_complete_time +
-                              robots_pick_complete_time + robots_move_to_depot_time + robots_move_to_pick_point_time)
+                              robots_pick_complete_time + robots_move_to_pick_point_time + robots_move_to_depot_time)
+
             # 下一个离散点时刻
             next_discrete_time = min([time for time in discrete_times if time > self.current_time])
+
             # 更新当前时间
             self.current_time = next_discrete_time
 
+            # 判断是否结束仿真
+            if self.current_time >= self.total_time:
+                self.done = True
+                break
+
             # 更新该离散点各对象的属性
             # 若当前时间等于新订单到达时刻，则将新订单加入到待分配订单列表中
-            if self.current_time == new_order_arrival_time:
+            while self.current_time == self.orders_not_arrived[0].arrive_time:
                 order = self.orders_not_arrived.pop(0)
                 self.orders_unassigned.append(order)
 
             # 若当前时间等于机器人移动到拣货点时刻，则更新机器人所在拣货位的机器人队列
             for robot in self.robots:
                 if self.current_time == robot.move_to_pick_point_time:
-                    pick_point = self.pick_points[robot.item.pick_point_id]
-                    pick_point.robot_queue.append(robot)
+                    pick_point = self.pick_points[robot.item.pick_point_id]  # 机器人所在拣货位
+                    pick_point.robot_queue.append(robot)  # 更新拣货位的机器人队列
+                    robot.position = pick_point.position  # 更新机器人的位置
                     # 若当前时间该拣货点有拣货员，则更新拣货员的拣货完成时间和该机器人的拣完商品时间
                     if pick_point.picker is not None:
                         # 机器人拣完商品时间
@@ -410,10 +423,9 @@ class WarehouseEnv:
             # 若当前时间等于机器人移动到depot_position时刻，则更新机器人的状态，重置机器人的订单对象
             for robot in self.robots:
                 if self.current_time == robot.move_to_depot_time:
-                    robot.state = 'idle'
-                    robot.order = None
-            pass
-        pass
+                    robot.state = 'idle'  # 更新机器人的状态
+                    robot.order = None  # 重置机器人的订单对象
+                    robot.position = self.depot_position  # 更新机器人的位置
 
     def assign_order_to_robot(self):
         """若存在待分配订单和空闲机器人，则为机器人分配订单"""
@@ -464,7 +476,7 @@ class WarehouseEnv:
                 # 机器人拣货完成时间
                 robot.item_pick_complete_time = picker.pick_start_time + (n + 1) * robot.item.pick_time
             # 拣货员在该拣货位拣货结束时间
-            picker.pick_end_time = picker.pick_start_time + len(pick_point.robot_queue) * picker.item.pick_time
+            picker.pick_end_time = pick_point.robot_queue[-1].item_pick_complete_time
             # 更新拣货员的位置
             picker.position = pick_point.position
 
@@ -524,7 +536,9 @@ class WarehouseEnv:
 if __name__ == "__main__":
     # 初始化仓库环境
     N_l = 10  # 单个货架中储货位的数量
-    N_w = 6  # 巷道的数量
+    area_dict = {'area1': 3, 'area2': 3}  # 仓库中每个区域包含的巷道数量
+    N_w = sum(area_dict.values())  # 巷道的数量
+    area_ids = list(area_dict.keys())
     S_l = 1  # 储货位的长度
     S_w = 1  # 储货位的宽度
     S_b = 2  # 底部通道的宽度
@@ -533,32 +547,59 @@ if __name__ == "__main__":
     depot_position = (0, 0)  # 机器人的起始位置
 
     # 初始化仓库环境
-    warehouse = WarehouseEnv(N_l, N_w, S_l, S_w, S_b, S_d, S_a, depot_position)
+    warehouse = WarehouseEnv(N_l, N_w, S_l, S_w, S_b, S_d, S_a, area_dict, area_ids, depot_position)
 
     # 基于仓库中的商品创建一个月内的订单对象，每个订单包含多个商品，订单到达时间服从泊松分布，仿真周期设置为一个月
     # 一个月的总秒数
     total_seconds = 30 * 24 * 3600
-    # 一个月内的订单列表
-    orders = []
-    # 订单编号
-    order_id = 1
-    # 订单到达时间
-    arrival_time = 0
-    while arrival_time < total_seconds:
-        # 订单中的商品列表
-        items = []
-        # 订单中的商品数量
-        n_items = random.randint(1, 10)
-        for i in range(n_items):
-            # 随机选择一个商品
-            item_id = random.choice(list(warehouse.items.keys()))
-            items.append(warehouse.items[item_id])
-        # 创建订单对象
-        order = Order(order_id, items, arrival_time)
-        orders.append(order)
-        # 生成下一个订单到达时间
-        arrival_time += random.expovariate(1 / 3600)
-        order_id += 1
-    print(f"Total number of orders: {len(orders)}")
+
+    # # 一个月内的订单列表
+    # orders = []
+    # # 订单编号
+    # order_id = 0
+    # # 订单到达时间
+    # arrival_time = 0
+    # while True:
+    #     # 订单中的商品列表
+    #     items = []
+    #     # 订单中的商品数量
+    #     n_items = random.randint(1, 10)
+    #     for i in range(n_items):
+    #         # 随机选择一个商品
+    #         item_id = random.choice(list(warehouse.items.keys()))
+    #         item_object = copy.deepcopy(warehouse.items[item_id])
+    #         items.append(item_object)
+    #
+    #     # 把items中拣货位编号相同的商品只保留一个
+    #     items = list({item.pick_point_id: item for item in items}.values())
+    #
+    #     # 创建订单对象
+    #     arrival_time += random.expovariate(1 / 360)  # 订单到达时间服从泊松分布
+    #     # 到达时间取整
+    #     arrival_time = int(arrival_time)  # 订单到达时间
+    #     order_id += 1  # 订单编号
+    #     order = Order(order_id, items, arrival_time)  # 创建订单对象
+    #     orders.append(order)  # 将订单加入到订单列表中
+    #     # 若订单到达时间大于一个月的总秒数，则跳出循环
+    #     if arrival_time >= total_seconds:
+    #         break
+    #
+    # # 将orders信息保存到orders.pkl文件中
+    # with open("orders.pkl", "wb") as f:
+    #     pickle.dump(orders, f)
+    #
+    # print(f"Total number of orders: {len(orders)}")
+
+
+    # 读取orders信息
+    with open("orders.pkl", "rb") as f:
+        orders = pickle.load(f)
 
     # 基于上述一个月内的订单数据和仓库环境数据，实现仓库环境的仿真
+    warehouse.reset(orders)  # 重置仓库环境
+    warehouse.total_time = total_seconds  # 仿真总时间
+    # 运行仿真：一个月
+    while not warehouse.done:
+        action = [1] + [2] * len(warehouse.area_ids)  # 每个区域的拣货员数量增加1，机器人数量增加1
+        warehouse.step(action) # 仓库环境的仿真步进函数
+        print(f"Current time: {warehouse.current_time}")  # 当前时间
