@@ -8,26 +8,8 @@
 """
 import numpy as np
 import random
-import time
-import copy
-import os
-import sys
-import math
 import pickle
-
-class Order:
-    def __init__(self, order_id, items, arrive_time=0):
-        self.order_id = order_id  # 订单的编号
-        self.items = items  # 订单中的商品列表
-        self.arrive_time = arrive_time  # 订单到达时间
-        self.complete_time = None  # 订单拣选完成时间
-        # 单位拣选时间成本
-        self.unit_time_cost = 1
-        # 订单中的未拣选完成的商品列表
-        self.unpicked_items = items
-        # 订单中的已拣选完成的商品列表
-        self.picked_items = []
-
+from environment.generat_order import GenerateData
 
 class Item:
     def __init__(self, item_id, bin_id, position, area_id, pick_point_id):
@@ -109,6 +91,8 @@ class Robot:
         """订单中的商品对象拣选顺序规划"""
         if self.order is not None:
             self.item_pick_order = [item for item in self.order.items]
+            # 商品对象按照其拣货位的位置进行排序（按位置X坐标从小到大重排序，相同X坐标的按照Y坐标从小到大进行排序）
+            self.item_pick_order = sorted(self.item_pick_order, key=lambda x: (x.position[0], x.position[1]))
         else:
             self.item_pick_order = []
 
@@ -329,6 +313,7 @@ class WarehouseEnv:
         离散点：新订单到达时刻、拣货员空闲时刻、机器人移动到拣货点时刻，机器人空闲时刻。
         action: 每天的开始时刻机器人和各区域内拣货员的调整值。
         """
+        self.action = action  # 动作
         self.adjust_robots = action[0]  # 动作调整的机器人数量
         self.adjust_pickers_dict = {area_id: action[i] for i, area_id in enumerate(self.area_ids, start=1)}  # 动作调整的每个区域的拣货员数量
         # 执行动作，调整仓库中的机器人和拣货员数量
@@ -366,13 +351,15 @@ class WarehouseEnv:
             """判断是否结束仿真"""
             if self.current_time >= self.total_time:
                 self.done = True
+                print("仿真结束时刻", self.current_time)
                 break
 
             """更新新离散点各对象的属性"""
             # 若当前时间等于新订单到达时刻，则将新订单加入到待分配订单列表中
             while self.current_time == self.orders_not_arrived[0].arrive_time:
-                order = self.orders_not_arrived.pop(0)
-                self.orders_unassigned.append(order)
+                order = self.orders_not_arrived.pop(0)  # 弹出新订单
+                self.orders_unassigned.append(order)  # 将新订单加入到未分配订单列表中
+                self.orders_uncompleted.append(order)  # 将新订单加入到未拣选完成的订单列表中
             # 若当前时间等于机器人移动到拣货点时刻，则更新机器人所在拣货位的机器人队列
             for robot in self.robots:
                 self.update_robot_queue(robot)
@@ -388,10 +375,17 @@ class WarehouseEnv:
                 self.update_robot(robot)
             # 若当前时间等于机器人移动到depot_position时刻，则更新机器人的状态，重置机器人的订单对象
             for robot in self.robots:
+                # 若机器人移动到depot_position时刻
                 if self.current_time == robot.move_to_depot_time:
                     robot.state = 'idle'  # 更新机器人的状态
+                    self.orders_uncompleted.remove(robot.order)  # 从未拣选完成的订单列表中移除该订单
                     robot.order = None  # 重置机器人的订单对象
                     robot.position = self.depot_position  # 更新机器人的位置
+
+        # 提取当前状态，计算回报值
+        self.state = self.state_extractor()  # 提取当前状态
+
+        return self.state, self.reward, self.done
 
     def update_robot(self, robot):
         """更新机器人属性和所属订单属性"""
@@ -489,16 +483,27 @@ class WarehouseEnv:
 
     def state_extractor(self):
         """提取仓库的当前状态"""
-        # 每个拣货位的机器人数量列表
+        # 每个拣货位的排队机器人数量
         robot_queue_list = [len(point.robot_queue) for point in self.pick_points.values()]
+        # 根据仓库拣货位的布局转为把robot_queue_list转为二维numpy数组
+        robot_queue_list = np.array(robot_queue_list).reshape((self.N_w, self.N_l))
         # 每个拣货位是否有拣货员拣货员，有的话为1，没有的话为0
         picker_list = [0 if point.picker is None else 1 for point in self.pick_points.values()]
-        # 每个拣货位未拣货商品数量
+        # 根据仓库拣货位的布局转为把picker_list转为二维numpy数组
+        picker_list = np.array(picker_list).reshape((self.N_w, self.N_l))
+        # 每个拣货位待拣货商品数量
         unpicked_items_list = self.pick_point_unpicked_items
+        # 根据仓库拣货位的布局转为把unpicked_items_list转为二维numpy数组
+        unpicked_items_list = np.array(unpicked_items_list).reshape((self.N_w, self.N_l))
         # depot_position位置的机器人数量，即空闲机器人数量
         n_robots_at_depot = len([robot for robot in self.robots if robot.state == 'idle'])
-        # 连接所有状态特征，并转为numpy，提取为状态向量
-        state = np.array(robot_queue_list + picker_list + unpicked_items_list + [n_robots_at_depot])
+        # 机器人总数
+        n_robots = len(self.robots)
+        # 拣货员总数
+        n_pickers = len(self.pickers)
+        # 所有状态特征组合成state字典
+        state = {'robot_queue_list': robot_queue_list, 'picker_list': picker_list, 'unpicked_items_list': unpicked_items_list,
+                 'n_robots_at_depot': n_robots_at_depot, 'n_robots': n_robots, 'n_pickers': n_pickers}
         return state
 
     def compute_reward(self):
@@ -558,57 +563,30 @@ if __name__ == "__main__":
 
     # 基于仓库中的商品创建一个月内的订单对象，每个订单包含多个商品，订单到达时间服从泊松分布，仿真周期设置为一个月
     # 一个月的总秒数
-    total_seconds = 30 * 3 * 3600
+    total_seconds = 30 * 24 * 3600  # 30天
+    # 订单到达泊松分布参数
+    poisson_parameter = 3600   # 一个小时一个订单
 
-    # # 一个月内的订单列表
-    # orders = []
-    # # 订单编号
-    # order_id = 0
-    # # 订单到达时间
-    # arrival_time = 0
-    # while True:
-    #     # 订单中的商品列表
-    #     items = []
-    #     # 订单中的商品数量
-    #     n_items = random.randint(1, 10)
-    #     for i in range(n_items):
-    #         # 随机选择一个商品
-    #         item_id = random.choice(list(warehouse.items.keys()))
-    #         item_object = copy.deepcopy(warehouse.items[item_id])
-    #         items.append(item_object)
-    #
-    #     # 把items中拣货位编号相同的商品只保留一个
-    #     items = list({item.pick_point_id: item for item in items}.values())
-    #
-    #     # 创建订单对象
-    #     arrival_time += random.expovariate(1 / 360)  # 订单到达时间服从泊松分布
-    #     # 到达时间取整
-    #     arrival_time = int(arrival_time)  # 订单到达时间
-    #     order_id += 1  # 订单编号
-    #     order = Order(order_id, items, arrival_time)  # 创建订单对象
-    #     orders.append(order)  # 将订单加入到订单列表中
-    #     # 若订单到达时间大于一个月的总秒数，则跳出循环
-    #     if arrival_time >= total_seconds:
-    #         break
-    #
-    # # 将orders信息保存到orders.pkl文件中
-    # with open("orders.pkl", "wb") as f:
-    #     pickle.dump(orders, f)
-    #
-    # print(f"Total number of orders: {len(orders)}")
+    # # 生成一个月内的订单数据，并保存到orders.pkl文件中
+    # generate_orders = GenerateData(warehouse, total_seconds, poisson_parameter)  # 生成订单数据对象
+    # generate_orders.generate_orders()  # 生成一个月内的订单数据
 
-
-    # 读取orders信息
+    # 读取一个月内的订单数据，orders.pkl文件中
     with open("orders.pkl", "rb") as f:
         orders = pickle.load(f)
 
     # 基于上述一个月内的订单数据和仓库环境数据，实现仓库环境的仿真
     warehouse.reset(orders)  # 重置仓库环境
     warehouse.total_time = total_seconds  # 仿真总时间
-    # 运行仿真：一个月
+
+    # 最后一个订单到达时间
+    last_order_arrival_time = orders[-1].arrive_time
+
+    # 仿真总时间一个月
     while not warehouse.done:
         action = [1] + [2] * len(warehouse.area_ids)  # 每个区域的拣货员数量增加1，机器人数量增加1
-        warehouse.step(action) # 仓库环境的仿真步进函数
+        # 仓库环境的仿真步进函数
+        state, reward, done = warehouse.step(action)
         # 输出当前状态
         print(f"Current state: {warehouse.state}")
         print(f"Current time: {warehouse.current_time}")  # 当前时间
