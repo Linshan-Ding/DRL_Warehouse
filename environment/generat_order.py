@@ -25,9 +25,11 @@ class GenerateData:
         n_items = len(self.warehouse.items)
         while True:
             # 订单中的商品数量
-            n_items = random.randint(1, n_items)  # 订单中的商品数量服从均匀分布
+            order_n_items = random.randint(1, n_items)  # 订单中的商品数量服从均匀分布
+            # 仓库中的商品对象列表
+            items_list = copy.deepcopy(list(self.warehouse.items.values()))
             # 从仓库所有商品字典中不重复抽样n_items个商品
-            items = random.choices(list(self.warehouse.items.values()), k=n_items)
+            items = random.sample(items_list, order_n_items)
             # 深复制items
             items = copy.deepcopy(items)
             # 创建订单对象
