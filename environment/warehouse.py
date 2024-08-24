@@ -82,6 +82,7 @@ class Robot:
         self.move_to_pick_point_time = 0  # 机器人移动到拣货位的时间
         self.move_to_depot_time = 0  # 机器人移动到depot_position的时间
         self.working_time = 0  # 机器人工作时间
+        self.remove = False  # 机器人移除标识
 
     def assign_order(self, order):
         """为机器人分配订单"""
@@ -130,6 +131,7 @@ class Picker:
         self.working_time = 0  # 拣货员工作时间
         self.pick_start_time = 0  # 拣货员在当前拣货位拣货开始时间
         self.pick_end_time = 0  # 拣货员在当前拣货位拣货结束时间
+        self.remove = False  # 拣货员移除标识
 
     # 根据负责的拣货位列表中的拣货位的坐标计算拣货员的初始位置（取各拣货位的坐标均值）
     @ property
@@ -281,7 +283,7 @@ class WarehouseEnv:
                 pass
             # 如果该区域添加的拣货员数量小于0
             else:
-                # 从各区域空闲的拣货员中移除多余的拣货员
+                # 从各区域移除拣货员
                 for i in range(abs(n_pickers_dict[area_id])):
                     picker = self.idle_pickers[area_id].pop(0)  # 从各区域空闲的拣货员中移除拣货员
                     self.pickers_area[area_id].remove(picker)  # 从对应区域的拣货员列表中移除拣货员
@@ -297,7 +299,7 @@ class WarehouseEnv:
         elif n_robots == 0:
             pass
         else:
-            # 从depot_position位置移除多余的机器人
+            # 移除机器人
             for i in range(abs(n_robots)):
                 robot = self.robots_at_depot.pop(0)  # 从depot_position位置移除机器人
                 self.robots.remove(robot)  # 从机器人列表中移除机器人
