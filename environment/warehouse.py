@@ -19,6 +19,7 @@ class Item:
         self.area_id = area_id  # 商品所在的区域编号
         self.pick_point_id = pick_point_id  # 商品所属拣货位的编号
         self.pick_time = 1  # 拣选时间
+        self.pick_complete_time = 0  # 商品拣选完成时间
 
 
 # 起始点类
@@ -71,13 +72,13 @@ class PickPoint:
 class Robot:
     def __init__(self, position):
         self.position = position  # 机器人的位置
+        self.pick_point = None  # 机器人当前拣货位
         self.order = None  # 机器人关联的订单
-        self.item_pick_order = []  # 机器人的商品拣选顺序
+        self.item_pick_order = []  # 机器人剩余未拣选商品的对象列表（按拣选顺序排序）
         self.state = 'idle'  # 机器人所处状态：'idle', 'busy'
         self.speed = 2  # 机器人移动速度
         self.unit_time_cost = 1  # 机器人工作单位时间成本
-        self.item = None  # 机器人待拣选或正在拣选的商品
-        self.item_pick_complete_time = 0  # 机器人的当前商品拣货完成时间
+        self.pick_point_complete_time = 0  # 机器人在当前拣货位的拣货完成时间
         self.move_to_pick_point_time = 0  # 机器人移动到拣货位的时间
         self.move_to_depot_time = 0  # 机器人移动到depot_position的时间
         self.working_time = 0  # 机器人工作时间
@@ -96,6 +97,24 @@ class Robot:
         else:
             self.item_pick_order = []
 
+    # 返回机器人在当前拣货位拣货完成后的下一个拣货位
+    def next_pick_point(self, pick_points):
+        if self.item_pick_order:
+            next_item = self.item_pick_order[0]
+            next_pick_point = next_item.pick_point_id
+            return pick_points[next_pick_point]
+        return None
+
+    # 机器人关联订单中属于当前拣货位的商品列表
+    @property
+    def items(self):
+        if self.order is not None:
+            items = []  # 机器人关联订单中属于当前拣货位的商品列表
+            for item in self.order.items:
+                if item.pick_point_id == self.pick_point.point_id:
+                    items.append(item)
+            return items
+        return None
 
 class Picker:
     def __init__(self, area_id):
@@ -138,6 +157,7 @@ class WarehouseEnv:
         self.area_ids = are_ids  # 仓库区域编号列表
         self.area_dict = are_dict  # 仓库区域字典
         self.depot_position = depot_position  # 机器人的起始位置
+        self.pack_time = 10  # 机器人拣完订单后的打包时间
         self.total_time = None  # 仿真总时间
 
         # 仓库固定属性
@@ -173,7 +193,7 @@ class WarehouseEnv:
         self.orders = []  # 整个仿真过程所有订单对象列表
         self.orders_not_arrived = []  # 未到达的订单对象列表
         self.orders_unassigned = []  # 已到达但未分配机器人的订单对象列表
-        self.orders_uncompleted = []  # 未拣选完成的订单对象列表
+        self.orders_uncompleted = []  # 已到达未拣选完成的订单对象列表
 
     # 根据nw确定巷道所处的仓库区域编号函数: 结合self.area_dict字典计算巷道所处的区域编号
     def area_id(self, nw):
@@ -300,7 +320,7 @@ class WarehouseEnv:
         self.orders = orders  # 整个仿真过程所有订单对象列表
         self.orders_not_arrived = orders  # 未到达的订单对象列表
         self.orders_unassigned = []  # 已到达未分配机器人的订单对象列表
-        self.orders_uncompleted = []  # 未拣选完成的订单对象列表
+        self.orders_uncompleted = []  # 已到达未拣选完成的订单对象列表
         self.robots_at_depot = []  # depot_position位置的机器人列表
         # 提取初始状态
         self.state = self.state_extractor()
@@ -324,7 +344,7 @@ class WarehouseEnv:
         end_time = self.current_time + one_day
 
         # 仿真该step: 从当前时间到下一个决策点
-        while self.current_time < end_time:  # 当前时间小于结束时间
+        while self.current_time < end_time and len(self.orders_not_arrived) > 0:  # 当前时间小于结束时间
             """为机器人和拣货员分配订单和拣货位，完成该离散点的决策"""
             # 若存在待分配订单和空闲机器人，则为机器人分配订单
             self.assign_order_to_robot()
@@ -337,7 +357,7 @@ class WarehouseEnv:
             # 中的最小值大于当前时间，则移动时钟到下一个离散点
             new_order_arrival_time = self.orders_not_arrived[0].arrive_time  # 新订单到达时刻
             pickers_pick_complete_time = [picker.pick_end_time for picker in self.pickers]  # 所有拣货员拣货完成时刻
-            robots_pick_complete_time = [robot.item_pick_complete_time for robot in self.robots]  # 所有机器人拣完商品时刻
+            robots_pick_complete_time = [robot.pick_point_complete_time for robot in self.robots]  # 所有机器人在拣货点拣完商品时刻
             robots_move_to_pick_point_time = [robot.move_to_pick_point_time for robot in self.robots]  # 所有机器人移动到拣货点时刻
             robots_move_to_depot_time = [robot.move_to_depot_time for robot in self.robots]  # 所有机器人移动到depot_position时刻
             # 所有离散时刻
@@ -348,32 +368,69 @@ class WarehouseEnv:
             # 更新当前时间
             self.current_time = next_discrete_time
 
-            """判断是否结束仿真"""
-            if self.current_time >= self.total_time:
-                self.done = True
-                print("仿真结束时刻", self.current_time)
-                break
-
             """更新新离散点各对象的属性"""
-            # 若当前时间等于新订单到达时刻，则将新订单加入到待分配订单列表中
+            # 1、若当前时间等于新订单到达时刻，则将新订单加入到待分配订单列表中
             while self.current_time == self.orders_not_arrived[0].arrive_time:
-                order = self.orders_not_arrived.pop(0)  # 弹出新订单
-                self.orders_unassigned.append(order)  # 将新订单加入到未分配订单列表中
-                self.orders_uncompleted.append(order)  # 将新订单加入到未拣选完成的订单列表中
-            # 若当前时间等于机器人移动到拣货点时刻，则更新机器人所在拣货位的机器人队列
+                order = self.orders_not_arrived.pop(0)
+                self.orders_unassigned.append(order)
+                self.orders_uncompleted.append(order)
+                if len(self.orders_not_arrived) == 0:
+                    break
+                # print("添加新到达订单", order.order_id)
+            # 2、若当前时间等于机器人移动到拣货点时刻，则更新机器人所在拣货位的机器人队列
             for robot in self.robots:
-                self.update_robot_queue(robot)
-            # 若当前时间等于拣货员拣货完成时刻，则更新拣货员的状态，重置拣货位的拣货员对象
+                if self.current_time == robot.move_to_pick_point_time:
+                    # print("机器人移动到新拣货位")
+                    # 更新机器人所在拣货位
+                    pick_point = robot.next_pick_point(self.pick_points)  # 机器人当前拣货位
+                    pick_point.robot_queue.append(robot)  # 更新拣货位的机器人队列
+                    robot.position = pick_point.position  # 更新机器人的位置
+                    robot.pick_point = pick_point  # 更新机器人所在拣货位
+                    # 若当前时间该拣货点有拣货员，则更新拣货员的拣货完成时间和该机器人的拣完商品时间
+                    if pick_point.picker is not None:
+                        # 更新拣货员拣货完工时间和机器人在该拣货位拣完商品时间
+                        for item in robot.items:
+                            pick_point.picker.pick_end_time += item.pick_time  # 更新拣货员拣货完成时间
+                        robot.pick_point_complete_time = pick_point.picker.pick_end_time  # 机器人在该拣货位的拣货完成时间
+            # 3、若当前时间等于拣货员拣货完成时刻，则更新拣货员的状态，重置拣货位的拣货员对象
             for picker in self.pickers:
                 if self.current_time == picker.pick_end_time:
+                    # print("拣货员拣货完成")
                     picker.state = 'idle'  # 更新拣货员的状态
                     pick_point = picker.pick_point  # 拣货员所在拣货位
                     pick_point.picker = None  # 重置拣货位的拣货员对象
                     picker.pick_point = None  # 重置拣货员的拣货位对象
-            # 若当前时间等于机器人拣完商品时刻：更新拣货位的机器人队列，更新机器人所属订单拣选的商品列表，更新机器人所属订单未拣选完成的商品列表
+            # 4、若当前时间等于机器人在拣货位拣完商品时刻：更新拣货位的机器人队列，更新机器人所属订单拣选的商品列表，更新机器人所属订单未拣选完成的商品列表
             for robot in self.robots:
-                self.update_robot(robot)
-            # 若当前时间等于机器人移动到depot_position时刻，则更新机器人的状态，重置机器人的订单对象
+                """更新机器人属性和所属订单属性"""
+                if self.current_time == robot.pick_point_complete_time:
+                    # print("机器人拣完当前拣货位商品")
+                    # 机器人所在拣货位
+                    pick_point = robot.pick_point
+                    # 从拣货位的机器人队列中移除该机器人
+                    pick_point.robot_queue.remove(robot)
+                    # 更新机器人所属订单拣选完成的商品列表, 机器人所属订单未拣选完成的商品列表, 机器人所属订单拣选的商品列表
+                    for item in robot.items:
+                        robot.order.picked_items.append(item)   # 更新机器人所属订单拣选完成的商品列表
+                        robot.order.unpicked_items.remove(item)  # 更新机器人所属订单未拣选完成的商品列表
+                        robot.item_pick_order.remove(item)  # 更新机器人所属订单拣选的商品列表
+                    # 若机器人所有商品未拣货完成, 则更新机器人移动到拣货点的时间，更新机器人待拣货或正在拣货的商品
+                    if len(robot.item_pick_order) > 0:
+                        # print("机器人未拣货完成")
+                        # 更新机器人下一个拣货位
+                        next_pick_point = robot.next_pick_point(self.pick_points)
+                        # 计算机器人移动到拣货点的时间
+                        shortest_path_length = self.shortest_path_between_pick_points(robot, next_pick_point)
+                        move_time = shortest_path_length / robot.speed
+                        robot.move_to_pick_point_time = self.current_time + move_time
+                    # 若机器人所有商品拣货完成，则更新机器人移动到depot_position的时间
+                    else:
+                        # print("机器人拣货完成")
+                        # 更新机器人移动到depot_position的时间
+                        shortest_path_length = self.shortest_path_between_pick_points(robot, self.depot_object)
+                        move_time = shortest_path_length / robot.speed
+                        robot.move_to_depot_time = self.current_time + move_time + self.pack_time  # 机器人移动到depot_position的时间
+            # 5、若当前时间等于机器人移动到depot_position时刻，则更新机器人的状态，重置机器人的订单对象
             for robot in self.robots:
                 # 若机器人移动到depot_position时刻
                 if self.current_time == robot.move_to_depot_time:
@@ -381,52 +438,17 @@ class WarehouseEnv:
                     self.orders_uncompleted.remove(robot.order)  # 从未拣选完成的订单列表中移除该订单
                     robot.order = None  # 重置机器人的订单对象
                     robot.position = self.depot_position  # 更新机器人的位置
+                    # print("机器人移动到depot_position")
+
+        """判断是否结束仿真"""
+        if self.current_time >= self.total_time:
+            self.done = True
+            print("仿真结束时刻", self.current_time)
 
         # 提取当前状态，计算回报值
         self.state = self.state_extractor()  # 提取当前状态
 
         return self.state, self.reward, self.done
-
-    def update_robot(self, robot):
-        """更新机器人属性和所属订单属性"""
-        if self.current_time == robot.item_pick_complete_time:
-            # 机器人所在拣货位
-            pick_point = self.pick_points[robot.item.pick_point_id]
-            # 从拣货位的机器人队列中移除该机器人
-            pick_point.robot_queue.remove(robot)
-            # 更新机器人所属订单拣选的商品列表
-            robot.order.picked_items.append(robot.item)
-            # 更新机器人所属订单未拣选完成的商品列表
-            robot.order.unpicked_items.remove(robot.item)
-            # 若机器人所有商品未拣货完成, 则更新机器人移动到拣货点的时间，更新机器人待拣货或正在拣货的商品
-            if len(robot.item_pick_order) > 0:
-                # 更新机器人拣选商品对象
-                robot.item = robot.item_pick_order.pop(0)
-                # 计算机器人移动到拣货点的时间
-                shortest_path_length = self.shortest_path_between_pick_points(robot, robot.item)
-                move_time = shortest_path_length / robot.speed
-                robot.move_to_pick_point_time = self.current_time + move_time
-            # 若机器人所有商品拣货完成，则更新机器人移动到depot_position的时间
-            else:
-                robot.item = None
-                # 更新机器人移动到depot_position的时间
-                shortest_path_length = self.shortest_path_between_pick_points(robot, self.depot_object)
-                move_time = shortest_path_length / robot.speed
-                robot.move_to_depot_time = self.current_time + move_time
-
-    # 当前时间等于机器人移动到拣货点时刻，更新机器人所在拣货位的机器人队列函数
-    def update_robot_queue(self, robot):
-        """更新机器人所在拣货位的机器人队列"""
-        if self.current_time == robot.move_to_pick_point_time:
-            pick_point = self.pick_points[robot.item.pick_point_id]  # 机器人所在拣货位
-            pick_point.robot_queue.append(robot)  # 更新拣货位的机器人队列
-            robot.position = pick_point.position  # 更新机器人的位置
-            # 若当前时间该拣货点有拣货员，则更新拣货员的拣货完成时间和该机器人的拣完商品时间
-            if pick_point.picker is not None:
-                # 机器人拣完商品时间
-                robot.item_pick_complete_time = pick_point.picker.pick_end_time + robot.item.pick_time
-                # 拣货员拣货完成时间
-                pick_point.picker.pick_end_time = robot.item_pick_complete_time
 
     def assign_order_to_robot(self):
         """若存在待分配订单和空闲机器人，则为机器人分配订单"""
@@ -437,10 +459,10 @@ class WarehouseEnv:
             order = self.orders_unassigned.pop(0)
             # 为机器人分配订单
             robot.assign_order(order)
-            # 机器人待拣选或正在拣选的商品
-            robot.item = robot.item_pick_order.pop(0)
+            # 机器人下一个拣货位
+            next_pick_point = robot.next_pick_point(self.pick_points)
             # 计算机器人移动到订单中首个商品的最短路径
-            shortest_path_length = self.shortest_path_between_pick_points(robot, robot.item)
+            shortest_path_length = self.shortest_path_between_pick_points(robot, next_pick_point)
             # 计算机器人移动时间
             move_time = shortest_path_length / robot.speed
             # 更新机器人的状态
@@ -453,10 +475,10 @@ class WarehouseEnv:
     def assign_pick_point_to_picker(self, area_id):
         """当前区域同时存在空闲拣货员和待分配拣货员的拣货位时"""
         while len(self.idle_pickers[area_id]) > 0 and len(self.idle_pick_points[area_id]) > 0:
-            # 随机选择一个空闲拣货员
-            picker = random.choice(self.idle_pickers[area_id])
-            # 选择距离该拣货员位置最近的待分配拣货位
-            pick_point = min(self.idle_pick_points[area_id], key=lambda point: self.shortest_path_between_pick_points(picker, point))
+            # 随机选择一个待分配拣货位
+            pick_point = random.choice(self.idle_pick_points[area_id])
+            # 选择距离该拣货位最近的空闲拣货员
+            picker = min(self.idle_pickers[area_id], key=lambda picker: self.shortest_path_between_pick_points(picker, pick_point))
             # 为拣货员分配拣货位
             picker.pick_point = pick_point
             # 为拣货位分配拣货员
@@ -470,14 +492,14 @@ class WarehouseEnv:
             # 更新拣货员的工作时间
             picker.working_time += move_time
             # 拣货员在该拣货位拣货开始时间
-            picker.pick_start_time = self.current_time + move_time
+            picker.pick_start_time = self.current_time + move_time  # 拣货员在该拣货位拣货开始时间
+            picker.pick_end_time = picker.pick_start_time  # 初始化拣货员在该拣货位拣货结束时间
             # 更新该拣货位的机器人对象队列中的所有机器人该商品的拣货完成时间，按机器人队列顺序完成拣货
-            for n in range(len(pick_point.robot_queue)):
-                robot = pick_point.robot_queue[n]
-                # 机器人拣货完成时间
-                robot.item_pick_complete_time = picker.pick_start_time + (n + 1) * robot.item.pick_time
-            # 拣货员在该拣货位拣货结束时间
-            picker.pick_end_time = pick_point.robot_queue[-1].item_pick_complete_time
+            for robot in pick_point.robot_queue:
+                # 更新拣货员拣货完工时间和机器人在该拣货位拣完商品时间
+                for item in robot.items:
+                    picker.pick_end_time += item.pick_time  # 更新拣货员拣货完成时间
+                robot.pick_point_complete_time = picker.pick_end_time  # 机器人在该拣货位的拣货完成时间
             # 更新拣货员的位置
             picker.position = pick_point.position
 
@@ -563,9 +585,9 @@ if __name__ == "__main__":
 
     # 基于仓库中的商品创建一个月内的订单对象，每个订单包含多个商品，订单到达时间服从泊松分布，仿真周期设置为一个月
     # 一个月的总秒数
-    total_seconds = 30 * 24 * 3600  # 30天
+    total_seconds = 3 * 24 * 3600  # 30天
     # 订单到达泊松分布参数
-    poisson_parameter = 3600   # 一个小时一个订单
+    poisson_parameter = 60  # 泊松分布参数, 60秒一个订单到达
 
     # # 生成一个月内的订单数据，并保存到orders.pkl文件中
     # generate_orders = GenerateData(warehouse, total_seconds, poisson_parameter)  # 生成订单数据对象
@@ -577,16 +599,17 @@ if __name__ == "__main__":
 
     # 基于上述一个月内的订单数据和仓库环境数据，实现仓库环境的仿真
     warehouse.reset(orders)  # 重置仓库环境
-    warehouse.total_time = total_seconds  # 仿真总时间
+    warehouse.total_time = total_seconds # 仿真总时间
 
     # 最后一个订单到达时间
     last_order_arrival_time = orders[-1].arrive_time
 
     # 仿真总时间一个月
     while not warehouse.done:
-        action = [1] + [2] * len(warehouse.area_ids)  # 每个区域的拣货员数量增加1，机器人数量增加1
+        action = [5] + [2] * len(warehouse.area_ids)  # 每个区域的拣货员数量增加1，机器人数量增加1
         # 仓库环境的仿真步进函数
         state, reward, done = warehouse.step(action)
         # 输出当前状态
         print(f"Current state: {warehouse.state}")
         print(f"Current time: {warehouse.current_time}")  # 当前时间
+        print("-----------------------------------------------------------------------------------------------------------------------------------------------")
