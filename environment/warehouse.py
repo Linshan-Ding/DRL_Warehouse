@@ -283,12 +283,20 @@ class WarehouseEnv:
                 pass
             # 如果该区域添加的拣货员数量小于0
             else:
-                # 从各区域移除拣货员
+                # 从各区域移除拣货员，优先移除空闲的拣货员，若无空闲拣货员，则移除忙碌的拣货员
                 for i in range(abs(n_pickers_dict[area_id])):
-                    picker = self.idle_pickers[area_id].pop(0)  # 从各区域空闲的拣货员中移除拣货员
-                    self.pickers_area[area_id].remove(picker)  # 从对应区域的拣货员列表中移除拣货员
-                    self.pickers.remove(picker)  # 从拣货员列表中移除拣货员
-
+                    # 若该区域移除标识为False的拣货员数量小于等于1，则跳出循环
+                    if len([picker for picker in self.pickers_area[area_id] if picker.remove is False]) <= 1:
+                        break
+                    else:  # 若该区域移除标识为False的拣货员数量大于1, 则移除拣货员
+                        if len(self.idle_pickers[area_id]) > 0:   # 若该区域有空闲拣货员
+                            picker = self.idle_pickers[area_id].pop(0)  # 从空闲拣货员列表中移除拣货员
+                            picker.remove = True  # 设置拣货员移除标识
+                            self.pickers_area[area_id].remove(picker)  # 从对应区域的拣货员列表中移除拣货员
+                            self.pickers.remove(picker)  # 从拣货员列表中移除拣货员
+                        else:  # 若该区域无空闲拣货员
+                            picker = self.pickers_area[area_id][0]  # 从对应区域的拣货员列表中选择第一个拣货员
+                            picker.remove = True  # 设置拣货员移除标识
         # 更新机器人数量
         if n_robots > 0:
             # 实例化机器人对象并添加到仓库中
@@ -299,10 +307,19 @@ class WarehouseEnv:
         elif n_robots == 0:
             pass
         else:
-            # 移除机器人
+            # 移除机器人，优先移除空闲的机器人，若无空闲机器人，则移除其他位置的机器人
             for i in range(abs(n_robots)):
-                robot = self.robots_at_depot.pop(0)  # 从depot_position位置移除机器人
-                self.robots.remove(robot)  # 从机器人列表中移除机器人
+                # 若移除标识符为False的机器人数量小于等于1，则跳出循环
+                if len([robot for robot in self.robots if robot.remove is False]) <= 1:
+                    break
+                else:  # 若移除标识符为False的机器人数量大于1, 则移除机器人
+                    if len(self.idle_robots) > 0:  # 若有空闲机器人
+                        robot = self.idle_robots.pop(0)  # 从空闲机器人列表中移除机器人
+                        robot.remove = True  # 设置机器人移除标识
+                        self.robots.remove(robot)  # 从机器人列表中移除机器人
+                    else: # 若无空闲机器人
+                        robot = self.robots[0]  # 从机器人列表中选择第一个机器人
+                        robot.remove = True  # 设置机器人移除标识
 
     def reset(self, orders):
         """重置仓库环境"""
@@ -402,6 +419,10 @@ class WarehouseEnv:
                     pick_point = picker.pick_point  # 拣货员所在拣货位
                     pick_point.picker = None  # 重置拣货位的拣货员对象
                     picker.pick_point = None  # 重置拣货员的拣货位对象
+                    # 若该拣货员的移除标识为True，则移除拣货员
+                    if picker.remove is True:
+                        self.pickers_area[picker.area_id].remove(picker)  # 从对应区域的拣货员列表中移除拣货员
+                        self.pickers.remove(picker)  # 从拣货员列表中移除拣货员
             # 4、若当前时间等于机器人在拣货位拣完商品时刻：更新拣货位的机器人队列，更新机器人所属订单拣选的商品列表，更新机器人所属订单未拣选完成的商品列表
             for robot in self.robots:
                 """更新机器人属性和所属订单属性"""
@@ -441,6 +462,9 @@ class WarehouseEnv:
                     robot.order = None  # 重置机器人的订单对象
                     robot.position = self.depot_position  # 更新机器人的位置
                     # print("机器人移动到depot_position")
+                    # 若机器人的移除标识为True，则移除机器人
+                    if robot.remove is True:
+                        self.robots.remove(robot)
 
         """判断是否结束仿真"""
         if self.current_time >= self.total_time:
@@ -608,7 +632,9 @@ if __name__ == "__main__":
 
     # 仿真总时间一个月
     while not warehouse.done:
-        action = [5] + [2] * len(warehouse.area_ids)  # 每个区域的拣货员数量增加1，机器人数量增加1
+        n_robot = random.randint(-1, 5)  # 机器人数量调整值
+        n_picker_area = random.randint(-1, 5)  # 拣货员数量调整值
+        action = [n_robot] + [n_picker_area] * len(warehouse.area_ids)  # 每个区域的拣货员数量增加1，机器人数量增加1
         # 仓库环境的仿真步进函数
         state, reward, done = warehouse.step(action)
         # 输出当前状态
