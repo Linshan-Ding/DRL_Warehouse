@@ -10,6 +10,7 @@ import numpy as np
 import random
 import pickle
 from environment.generat_order import GenerateData
+import gym
 
 class Item:
     def __init__(self, item_id, bin_id, position, area_id, pick_point_id):
@@ -146,7 +147,7 @@ class Picker:
 # 包括机器人、拣货员、拣货位、储货位和商品
 # 步进函数step()实现仓库环境的仿真
 # 动作为每间隔24个小时调整每个区域的拣货员和仓库中总的机器人的数量
-class WarehouseEnv:
+class WarehouseEnv(gym.Env):
     def __init__(self, N_l, N_w, S_l, S_w, S_b, S_d, S_a, are_dict, are_ids, depot_position):
         # 仓库环境参数
         self.N_l = N_l  # 单个货架中储货位的数量
@@ -354,7 +355,14 @@ class WarehouseEnv:
         """
         self.action = action  # 动作
         self.adjust_robots = action[0]  # 动作调整的机器人数量
+        # 如果当前机器人总数调整后小于或等于0，则设置调整数量为当前总数-1的负数
+        if len(self.robots) + self.adjust_robots <= 0:
+            self.adjust_robots = -len(self.robots) + 1
         self.adjust_pickers_dict = {area_id: action[i] for i, area_id in enumerate(self.area_ids, start=1)}  # 动作调整的每个区域的拣货员数量
+        # 如果当前区域拣货员数量调整后小于或等于0，则设置调整数量为当前区域拣货员数量-1的负数
+        for area_id in self.area_ids:
+            if len(self.pickers_area[area_id]) + self.adjust_pickers_dict[area_id] <= 0:
+                self.adjust_pickers_dict[area_id] = -len(self.pickers_area[area_id]) + 1
         # 执行动作，调整仓库中的机器人和拣货员数量
         self.adjust_robots_and_pickers(self.adjust_robots, self.adjust_pickers_dict)
         # 一天的仿真时间
@@ -474,6 +482,9 @@ class WarehouseEnv:
         # 提取当前状态，计算回报值
         self.state = self.state_extractor()  # 提取当前状态
 
+        # 计算当前回报值
+        self.reward = self.compute_reward()
+
         return self.state, self.reward, self.done
 
     def assign_order_to_robot(self):
@@ -550,13 +561,25 @@ class WarehouseEnv:
         # 拣货员总数
         n_pickers = len(self.pickers)
         # 所有状态特征组合成state字典
-        state = {'robot_queue_list': robot_queue_list, 'picker_list': picker_list, 'unpicked_items_list': unpicked_items_list,
+        self.state = {'robot_queue_list': robot_queue_list, 'picker_list': picker_list, 'unpicked_items_list': unpicked_items_list,
                  'n_robots_at_depot': n_robots_at_depot, 'n_robots': n_robots, 'n_pickers': n_pickers}
-        return state
+        return self.state
 
     def compute_reward(self):
         """计算当前奖励"""
-        pass
+        # 奖励设计：完成一个订单: +10; 每个未完成的订单: -1; 每个机器人操作成本: -0.1; 每个拣货员操作成本: -0.05
+        self.reward = 0
+        # 奖励已完成的订单
+        # 假设已完成的订单不在 orders_uncompleted 中，被移除
+        completed_orders = len([order for order in self.orders if order not in self.orders_uncompleted])
+        self.reward += completed_orders * 10
+        # 惩罚未完成的订单
+        self.reward -= len(self.orders_uncompleted) * 1
+        # 惩罚机器人数量
+        self.reward -= len(self.robots) * 0.1
+        # 惩罚拣货员数量
+        self.reward -= len(self.pickers) * 0.05
+        return self.reward
 
     # 当前离散点空闲机器人列表
     @ property
@@ -611,10 +634,10 @@ if __name__ == "__main__":
 
     # 基于仓库中的商品创建一个月内的订单对象，每个订单包含多个商品，订单到达时间服从泊松分布，仿真周期设置为一个月
     # 一个月的总秒数
-    total_seconds = 3 * 24 * 3600  # 30天
+    total_seconds = 7 * 24 * 3600  # 7天
+
     # 订单到达泊松分布参数
     poisson_parameter = 60  # 泊松分布参数, 60秒一个订单到达
-
     # # 生成一个月内的订单数据，并保存到orders.pkl文件中
     # generate_orders = GenerateData(warehouse, total_seconds, poisson_parameter)  # 生成订单数据对象
     # generate_orders.generate_orders()  # 生成一个月内的订单数据
@@ -624,16 +647,16 @@ if __name__ == "__main__":
         orders = pickle.load(f)
 
     # 基于上述一个月内的订单数据和仓库环境数据，实现仓库环境的仿真
-    warehouse.reset(orders)  # 重置仓库环境
     warehouse.total_time = total_seconds # 仿真总时间
 
     # 最后一个订单到达时间
     last_order_arrival_time = orders[-1].arrive_time
 
     # 仿真总时间一个月
+    warehouse.reset(orders)  # 重置仓库环境
     while not warehouse.done:
-        n_robot = random.randint(-1, 5)  # 机器人数量调整值
-        n_picker_area = random.randint(-1, 5)  # 拣货员数量调整值
+        n_robot = random.randint(-5, -1)  # 机器人数量调整值
+        n_picker_area = random.randint(-5, -1)  # 拣货员数量调整值
         action = [n_robot] + [n_picker_area] * len(warehouse.area_ids)  # 每个区域的拣货员数量增加1，机器人数量增加1
         # 仓库环境的仿真步进函数
         state, reward, done = warehouse.step(action)

@@ -1,7 +1,7 @@
 """
 生成仿真订单
 """
-from class_public import Order
+from environment.class_public import Order
 import random
 import copy
 import pickle
