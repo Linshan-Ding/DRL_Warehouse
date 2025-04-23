@@ -7,9 +7,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.distributions import Normal
 from environment.warehouse import WarehouseEnv  # 导入仓库环境类
-from environment.generat_order import GenerateData
 import numpy as np
-from environment.class_public import Order
 import copy
 import pickle # 用于读取订单数据
 
@@ -27,7 +25,7 @@ depot_position = (0, 0)  # 机器人的起始位置
 # 初始化仓库环境
 warehouse = WarehouseEnv(N_l, N_w, S_l, S_w, S_b, S_d, S_a, area_dict, area_ids, depot_position)
 # 一个月的总秒数
-total_seconds = 7 * 24 * 3600  # 7天
+total_seconds = 6 * 24 * 3600  # 7天
 
 # # 订单到达泊松分布参数
 # poisson_parameter = 60  # 泊松分布参数, 60秒一个订单到达
@@ -205,7 +203,6 @@ class PPOAgent:
                 state['n_pickers']])).unsqueeze(0).to(self.device)  # Shape: (1, 3)
 
             mean, std = self.policy_old(matrix_inputs, scalar_inputs)
-            print(std)
             dist = Normal(mean, std)
             action = dist.sample()
             action_logprob = dist.log_prob(action).sum(dim=1)
@@ -283,7 +280,7 @@ class PPOAgent:
                     ] for state in states
         ])).to(self.device)  # Shape: (batch, 3)
 
-        actions = torch.FloatTensor(actions).to(self.device)  # Shape: (batch, 3)
+        actions = torch.FloatTensor(np.array(actions)).to(self.device)  # Shape: (batch, 3)
         old_logprobs = torch.FloatTensor(logprobs).to(self.device)  # Shape: (batch,)
 
         # Compute values and advantages

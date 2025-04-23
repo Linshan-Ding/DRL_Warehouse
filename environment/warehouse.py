@@ -197,6 +197,7 @@ class WarehouseEnv(gym.Env):
         self.orders_not_arrived = []  # 未到达的订单对象列表
         self.orders_unassigned = []  # 已到达但未分配机器人的订单对象列表
         self.orders_uncompleted = []  # 已到达未拣选完成的订单对象列表
+        self.orders_completed = []  # 已完成订单列表
 
     # 根据nw确定巷道所处的仓库区域编号函数: 结合self.area_dict字典计算巷道所处的区域编号
     def area_id(self, nw):
@@ -569,16 +570,12 @@ class WarehouseEnv(gym.Env):
         """计算当前奖励"""
         # 奖励设计：完成一个订单: +10; 每个未完成的订单: -1; 每个机器人操作成本: -0.1; 每个拣货员操作成本: -0.05
         self.reward = 0
-        # 奖励已完成的订单
-        # 假设已完成的订单不在 orders_uncompleted 中，被移除
-        completed_orders = len([order for order in self.orders if order not in self.orders_uncompleted])
-        self.reward += completed_orders * 10
         # 惩罚未完成的订单
-        self.reward -= len(self.orders_uncompleted) * 1
+        self.reward -= len(self.orders_uncompleted) * 0.001
         # 惩罚机器人数量
         self.reward -= len(self.robots) * 0.1
         # 惩罚拣货员数量
-        self.reward -= len(self.pickers) * 0.05
+        self.reward -= len(self.pickers) * 0.5
         return self.reward
 
     # 当前离散点空闲机器人列表
