@@ -36,15 +36,16 @@ class GenerateData:
             arrival_time += random.expovariate(1 / self.poisson_parameter)  # 订单到达时间服从泊松分布
             # 到达时间取整
             arrival_time = int(arrival_time)  # 订单到达时间
+            due_time = arrival_time + random.expovariate(1 / self.poisson_parameter)  # 到期时间
             order_id += 1  # 订单编号
-            order = Order(order_id, items, arrival_time)  # 创建订单对象
+            order = Order(order_id, items, arrival_time, due_time)  # 创建订单对象
             orders.append(order)  # 将订单加入到订单列表中
             # 若订单到达时间大于一个月的总秒数，则跳出循环
             if arrival_time >= self.total_seconds:
                 break
 
-        # 将orders信息保存到orders.pkl文件中
-        with open("orders.pkl", "wb") as f:
+        # 将orders信息保存到D:\Python project\DRL_Warehouse\data文件夹中，并在命名中融合self.poisson_parameter信息
+        with open("D:\Python project\DRL_Warehouse\data\orders_{}.pkl".format(self.poisson_parameter), "wb") as f:
             pickle.dump(orders, f)
 
         print(f"Total number of orders: {len(orders)}")

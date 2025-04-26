@@ -10,10 +10,11 @@ from environment.warehouse import WarehouseEnv  # 导入仓库环境类
 import numpy as np
 import copy
 import pickle # 用于读取订单数据
+from data.generat_order import GenerateData
 
 # -----------------初始化仓库环境---------------------
 N_l = 10  # 单个货架中储货位的数量
-area_dict = {'area1': 3, 'area2': 3}  # 仓库中每个区域包含的巷道数量
+area_dict = {'area1': 3, 'area2': 3, 'area3': 3, 'area4': 3, 'area5': 3, 'area6': 3}  # 仓库中每个区域包含的巷道数量
 N_w = sum(area_dict.values())  # 巷道的数量
 area_ids = list(area_dict.keys())
 S_l = 1  # 储货位的长度
@@ -27,140 +28,99 @@ warehouse = WarehouseEnv(N_l, N_w, S_l, S_w, S_b, S_d, S_a, area_dict, area_ids,
 # 一个月的总秒数
 total_seconds = 6 * 24 * 3600  # 7天
 
-# # 订单到达泊松分布参数
-# poisson_parameter = 60  # 泊松分布参数, 60秒一个订单到达
+# 订单数据保存和读取位置
+file_order = 'D:\Python project\DRL_Warehouse\data'
+# 订单到达泊松分布参数
+poisson_parameter = 60  # 泊松分布参数, 60秒一个订单到达
+
 # # 生成一个月内的订单数据，并保存到orders.pkl文件中
 # generate_orders = GenerateData(warehouse, total_seconds, poisson_parameter)  # 生成订单数据对象
 # generate_orders.generate_orders()  # 生成一个月内的订单数据
 
 # 读取一个月内的订单数据，orders.pkl文件中
-with open("orders.pkl", "rb") as f:
+with open(file_order+ "\orders_{}.pkl".format(poisson_parameter), "rb") as f:
     orders = pickle.load(f)  # 读取订单数据
 
 # 基于上述一个月内的订单数据和仓库环境数据，实现仓库环境的仿真
 warehouse.total_time = total_seconds # 仿真总时间
 
-# -----------------定义神经网络---------------------
+# 定义策略网络
 class PolicyNetwork(nn.Module):
-    def __init__(self, input_channels=3, input_height=6, input_width=10, scalar_dim=3, hidden_dim=128, output_dim=3):
-        """
-        Policy Network with CNN for matrix inputs and FC for scalar inputs.
-
-        Args:
-            input_channels (int): Number of channels for CNN (3 matrices).
-            input_height (int): Height of each matrix.
-            input_width (int): Width of each matrix.
-            scalar_dim (int): Number of scalar state features.
-            hidden_dim (int): Number of hidden units in FC layers.
-            output_dim (int): Number of actions (robot adjust, picker1 adjust, picker2 adjust).
-        """
+    def __init__(self, input_channels=3, input_height=18, input_width=10, scalar_dim=7, hidden_dim=128, output_dim=7):
         super(PolicyNetwork, self).__init__()
+        self.output_dim = output_dim
 
-        # Define CNN layers for the three matrices combined as multi-channel input
+        # CNN层
         self.conv1 = nn.Conv2d(input_channels, 16, kernel_size=3, stride=1, padding=1)
-        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1)
+        self.conv2 = nn.Conv2d(16, 1, kernel_size=3, stride=1, padding=1)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        # Calculate the size after convolution and pooling
-        conv_output_size = (input_height // 2) * (input_width // 2) * 32  # After two conv + pool layers
+        # 计算全连接层输入尺寸
+        conv_output_size = (input_height // 2) * (input_width // 2) * 1  # 9 * 5 * 32 = 1600
 
-        # Fully connected layers
+        # 全连接层
         self.fc1 = nn.Linear(conv_output_size + scalar_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+
+        # 输出层
         self.action_mean = nn.Linear(hidden_dim, output_dim)
-        self.action_log_std = nn.Parameter(torch.zeros(output_dim))  # Learnable log standard deviation
+        self.action_log_std = nn.Parameter(torch.zeros(output_dim))
+
+        # 激活函数
+        self.activation = nn.ReLU()
 
     def forward(self, matrix_inputs, scalar_inputs):
-        """
-        Forward pass through the network.
+        x = self.activation(self.conv1(matrix_inputs))  # (batch_size, 16, 18, 10)
+        x = self.activation(self.conv2(x))             # (batch_size, 32, 18, 10)
+        x = self.pool(x)                                # (batch_size, 32, 10, 5)
+        x = x.view(x.size(0), -1)                      # (batch_size, 1600)
 
-        Args:
-            matrix_inputs (torch.Tensor): Tensor of shape (batch_size, 3, 6, 10).
-            scalar_inputs (torch.Tensor): Tensor of shape (batch_size, 3).
-
-        Returns:
-            mean (torch.Tensor): Mean of action distributions.
-            std (torch.Tensor): Standard deviation of action distributions.
-        """
-        x = torch.relu(self.conv1(matrix_inputs))  # (batch_size, 16, 6, 10)
-        x = torch.relu(self.conv2(x))  # (batch_size, 32, 6, 10)
-        x = self.pool(x)  # (batch_size, 32, 3, 5)
-        x = x.view(x.size(0), -1)  # (batch_size, 32*3*5) = (batch_size, 480)
-
-        # Concatenate with scalar inputs
-        x = torch.cat((x, scalar_inputs), dim=1)  # (batch_size, 480 + 3) = (batch_size, 483)
-        x = torch.relu(self.fc1(x))  # (batch_size, hidden_dim)
-        x = torch.relu(self.fc2(x))  # (batch_size, hidden_dim)
-        mean = self.action_mean(x)  # (batch_size, output_dim)
-        std = torch.exp(self.action_log_std)  # (output_dim,)
-        std = std.expand_as(mean)  # (batch_size, output_dim)
+        # 拼接标量输入
+        x = torch.cat((x, scalar_inputs), dim=1)       # (batch_size, 1607)
+        x = self.activation(self.fc1(x))               # (batch_size, hidden_dim)
+        x = self.activation(self.fc2(x))               # (batch_size, hidden_dim)
+        mean = self.action_mean(x)                      # (batch_size, 7)
+        std = torch.exp(self.action_log_std)            # (7,)
+        std = std.expand_as(mean)                        # (batch_size, 7)
         return mean, std
 
-
+# 定义值网络
 class ValueNetwork(nn.Module):
-    def __init__(self, input_channels=3, input_height=6, input_width=10, scalar_dim=3, hidden_dim=128):
-        """
-        Value Network with CNN for matrix inputs and FC for scalar inputs.
-
-        Args:
-            input_channels (int): Number of channels for CNN (3 matrices).
-            input_height (int): Height of each matrix.
-            input_width (int): Width of each matrix.
-            scalar_dim (int): Number of scalar state features.
-            hidden_dim (int): Number of hidden units in FC layers.
-        """
+    def __init__(self, input_channels=3, input_height=18, input_width=10, scalar_dim=7, hidden_dim=128):
         super(ValueNetwork, self).__init__()
 
-        # Define CNN layers for the three matrices combined as multi-channel input
+        # CNN层
         self.conv1 = nn.Conv2d(input_channels, 16, kernel_size=3, stride=1, padding=1)
-        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1)
+        self.conv2 = nn.Conv2d(16, 1, kernel_size=3, stride=1, padding=1)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        # Calculate the size after convolution and pooling
-        conv_output_size = (input_height // 2) * (input_width // 2) * 32  # After two conv + pool layers
+        # 计算全连接层输入尺寸
+        conv_output_size = (input_height // 2) * (input_width // 2) * 1  # 9 * 5 * 32 = 1600
 
-        # Fully connected layers
+        # 全连接层
         self.fc1 = nn.Linear(conv_output_size + scalar_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
         self.value_head = nn.Linear(hidden_dim, 1)
 
+        # 激活函数
+        self.activation = nn.ReLU()
+
     def forward(self, matrix_inputs, scalar_inputs):
-        """
-        Forward pass through the network.
+        x = self.activation(self.conv1(matrix_inputs))  # (batch_size, 16, 18, 10)
+        x = self.activation(self.conv2(x))             # (batch_size, 32, 18, 10)
+        x = self.pool(x)                                # (batch_size, 32, 10, 5)
+        x = x.view(x.size(0), -1)                      # (batch_size, 1600)
 
-        Args:
-            matrix_inputs (torch.Tensor): Tensor of shape (batch_size, 3, 6, 10).
-            scalar_inputs (torch.Tensor): Tensor of shape (batch_size, 3).
-
-        Returns:
-            state_value (torch.Tensor): Estimated value of the state.
-        """
-        x = torch.relu(self.conv1(matrix_inputs))  # (batch_size, 16, 6, 10)
-        x = torch.relu(self.conv2(x))  # (batch_size, 32, 6, 10)
-        x = self.pool(x)  # (batch_size, 32, 3, 5)
-        x = x.view(x.size(0), -1)  # (batch_size, 32*3*5) = (batch_size, 480)
-
-        # Concatenate with scalar inputs
-        x = torch.cat((x, scalar_inputs), dim=1)  # (batch_size, 480 + 3) = (batch_size, 483)
-        x = torch.relu(self.fc1(x))  # (batch_size, hidden_dim)
-        x = torch.relu(self.fc2(x))  # (batch_size, hidden_dim)
-        state_value = self.value_head(x)  # (batch_size, 1)
+        # 拼接标量输入
+        x = torch.cat((x, scalar_inputs), dim=1)       # (batch_size, 1607)
+        x = self.activation(self.fc1(x))               # (batch_size, hidden_dim)
+        x = self.activation(self.fc2(x))               # (batch_size, hidden_dim)
+        state_value = self.value_head(x)                # (batch_size, 1)
         return state_value
 
-# -----------------PPO算法实现-------------------------
+# 定义PPO代理
 class PPOAgent:
     def __init__(self, policy_network, value_network, lr=3e-4, gamma=0.99, eps_clip=0.2, K_epochs=4):
-        """
-        PPO Agent with separate policy and value networks.
-
-        Args:
-            policy_network (nn.Module): The policy network.
-            value_network (nn.Module): The value network.
-            lr (float): Learning rate.
-            gamma (float): Discount factor.
-            eps_clip (float): Clipping parameter.
-            K_epochs (int): Number of training epochs.
-        """
         self.policy = policy_network
         self.policy_old = copy.deepcopy(policy_network)
         self.policy_old.eval()
@@ -180,74 +140,55 @@ class PPOAgent:
         self.value_network.to(self.device)
 
     def select_action(self, state):
-        """
-        Select an action based on the current state.
-
-        Args:
-            state (dict): Current state dictionary.
-
-        Returns:
-            action_tuple (tuple): (robot_adjust, picker1_adjust, picker2_adjust)
-            log_prob (float): Log probability of the action.
-        """
         self.policy_old.eval()
         with torch.no_grad():
-            # Extract matrix and scalar inputs
-            matrix_inputs = torch.FloatTensor(np.array([
-                np.array(state['robot_queue_list']),
-                np.array(state['picker_list']),
-                np.array(state['unpicked_items_list'])])).unsqueeze(0).to(self.device)  # Shape: (1, 3, 6, 10)
-            scalar_inputs = torch.FloatTensor(np.array([
-                state['n_robots_at_depot'],
-                state['n_robots'],
-                state['n_pickers']])).unsqueeze(0).to(self.device)  # Shape: (1, 3)
+            # 提取矩阵和标量输入
+            matrix_inputs = torch.FloatTensor([
+                state['robot_queue_list'],
+                state['picker_list'],
+                state['unpicked_items_list']
+            ]).unsqueeze(0).to(self.device)  # (1, 3, 21, 10)
+
+            scalar_inputs = torch.FloatTensor([state['n_robots']] + state['n_pickers_area']).unsqueeze(0).to(self.device)  # (1, 7)
 
             mean, std = self.policy_old(matrix_inputs, scalar_inputs)
             dist = Normal(mean, std)
             action = dist.sample()
-            action_logprob = dist.log_prob(action).sum(dim=1)
+            log_prob = dist.log_prob(action).sum(dim=1)
 
-            action = action.cpu().numpy()[0]
-            action_logprob = action_logprob.cpu().numpy()[0]
+            action = action.cpu().numpy()[0]       # (7,)
+            log_prob = log_prob.cpu().numpy()[0]
 
-            # Clip actions to a reasonable range, e.g., [-5, 5]
+            # 动作范围限制
             action = np.clip(action, -5, 5)
 
-            # 动作中的每个元素取整
+            # 如果动作需要为整数，进行四舍五入
             action = np.round(action).astype(int)
 
-            # Store information for PPO update
+            # 存储记忆
             self.memory.append({
                 'state': state,
                 'action': action,
-                'logprob': action_logprob,
-                'reward': None,  # To be filled after environment step
+                'logprob': log_prob,
+                'reward': None,    # 环境步后填充
                 'done': None,
-                'next_state': None  # To be filled after environment step
+                'next_state': None  # 环境步后填充
             })
 
-            # Convert to floats for continuous action space
-            return action, action_logprob
+            return action, log_prob
 
     def store_reward_and_next_state(self, idx, reward, done, next_state):
-        """
-        Store reward, done flag, and next state in memory at index idx.
-
-        Args:
-            idx (int): Index in memory.
-            reward (float): Reward obtained.
-            done (bool): Whether the episode is done.
-            next_state (dict): The next state after taking the action.
-        """
+        """存储奖励和下一个状态"""
         self.memory[idx]['reward'] = reward
         self.memory[idx]['done'] = done
         self.memory[idx]['next_state'] = next_state
 
     def update(self):
-        """
-        Update policy and value networks using PPO algorithm.
-        """
-        # Convert memory to tensors
+        """使用PPO算法更新策略和值网络"""
+        if len(self.memory) == 0:
+            return  # 无需更新
+
+        # 提取记忆数据
         states = []
         actions = []
         logprobs = []
@@ -263,95 +204,82 @@ class PPOAgent:
             dones.append(transition['done'])
             next_states.append(transition['next_state'])
 
-        # Prepare tensors with numpy intermediate conversion
-        matrix_inputs = torch.FloatTensor(np.array([
+        # 转换为张量
+        matrix_inputs = torch.FloatTensor([
             [
-                np.array(state['robot_queue_list']),
-                np.array(state['picker_list']),
-                np.array(state['unpicked_items_list'])
-                    ] for state in states
-        ])).to(self.device)  # Shape: (batch, 3, 6, 10)
+                state['robot_queue_list'],
+                state['picker_list'],
+                state['unpicked_items_list']
+            ] for state in states
+        ]).to(self.device)  # (batch, 3, 21, 10)
 
-        scalar_inputs = torch.FloatTensor(np.array([
-                    [
-                        state['n_robots_at_depot'],
-                        state['n_robots'],
-                        state['n_pickers']
-                    ] for state in states
-        ])).to(self.device)  # Shape: (batch, 3)
+        scalar_inputs = torch.FloatTensor([
+            [state['n_robots']] + state['n_pickers_area']
+            for state in states
+        ]).to(self.device)  # (batch, 7)
 
-        actions = torch.FloatTensor(np.array(actions)).to(self.device)  # Shape: (batch, 3)
-        old_logprobs = torch.FloatTensor(logprobs).to(self.device)  # Shape: (batch,)
+        actions = torch.FloatTensor(actions).to(self.device)  # (batch, 7)
+        old_logprobs = torch.FloatTensor(logprobs).to(self.device)  # (batch,)
 
-        # Compute values and advantages
+        # 计算值和优势
         with torch.no_grad():
-            # Value estimates for current states
-            values = self.value_network(matrix_inputs, scalar_inputs).squeeze(1)  # Shape: (batch,)
-            # Value estimates for next states
-            next_matrix_inputs = torch.FloatTensor(np.array([
+            values = self.value_network(matrix_inputs, scalar_inputs).squeeze(1)  # (batch,)
+
+            next_matrix_inputs = torch.FloatTensor([
                 [
-                    np.array(state['robot_queue_list']),
-                    np.array(state['picker_list']),
-                    np.array(state['unpicked_items_list'])
-                            ] for state in next_states
-            ])).to(self.device)  # Shape: (batch, 3, 6, 10)
+                    state['robot_queue_list'],
+                    state['picker_list'],
+                    state['unpicked_items_list']
+                ] for state in next_states
+            ]).to(self.device)  # (batch, 3, 21, 10)
 
-            next_scalar_inputs = torch.FloatTensor(np.array([
-                            [
-                                state['n_robots_at_depot'],
-                                state['n_robots'],
-                                state['n_pickers']
-                            ] for state in next_states
-            ])).to(self.device)  # Shape: (batch, 3)
+            next_scalar_inputs = torch.FloatTensor([
+                [state['n_robots']] + state['n_pickers_area']
+                for state in next_states
+            ]).to(self.device)  # (batch, 7)
 
-            next_values = self.value_network(next_matrix_inputs, next_scalar_inputs).squeeze(1)  # Shape: (batch,)
-            # Compute targets
-            targets = torch.FloatTensor(rewards).to(self.device) + self.gamma * next_values * (1 - torch.FloatTensor(dones).to(self.device))
+            next_values = self.value_network(next_matrix_inputs, next_scalar_inputs).squeeze(1)  # (batch,)
+
+            rewards_tensor = torch.FloatTensor(rewards).to(self.device)
+            dones_tensor = torch.FloatTensor(dones).to(self.device)
+            targets = rewards_tensor + self.gamma * next_values * (1 - dones_tensor)
             advantages = targets - values
 
-        # Optimize policy and value networks
+        # PPO更新
         for _ in range(self.K_epochs):
-            # Recompute means and stds
             mean, std = self.policy(matrix_inputs, scalar_inputs)
             dist = Normal(mean, std)
             logprobs_new = dist.log_prob(actions).sum(dim=1)
             entropy = dist.entropy().sum(dim=1)
 
-            # Compute ratio
             ratios = torch.exp(logprobs_new - old_logprobs)
 
-            # Compute surrogate loss
             surr1 = ratios * advantages
             surr2 = torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
             policy_loss = -torch.min(surr1, surr2).mean()
-            value_loss = nn.MSELoss()(self.value_network(matrix_inputs, scalar_inputs).squeeze(1), targets)
+
+            value = self.value_network(matrix_inputs, scalar_inputs).squeeze(1)
+            value_loss = nn.MSELoss()(value, targets)
+
             entropy_loss = -0.01 * entropy.mean()
 
             loss = policy_loss + 0.5 * value_loss + entropy_loss
 
-            # Take gradient step
+            # 反向传播与优化
             self.policy_optimizer.zero_grad()
             self.value_optimizer.zero_grad()
             loss.backward()
             self.policy_optimizer.step()
             self.value_optimizer.step()
 
-        # Update old policy
+        # 更新旧的策略网络
         self.policy_old.load_state_dict(self.policy.state_dict())
 
-        # Clear memory
+        # 清空记忆
         self.memory = []
 
-# -----------------训练PPO---------------------
+# 定义训练函数
 def train_ppo_agent(ppo_agent, warehouse_env, num_episodes=1000):
-    """
-    Train the PPO agent in the warehouse environment.
-
-    Args:
-        ppo_agent (PPOAgent): The PPO agent.
-        warehouse_env (WarehouseEnv): The warehouse environment.
-        num_episodes (int): Number of training episodes.
-    """
     for episode in range(num_episodes):
         state = warehouse_env.reset(orders)
         done = False
@@ -360,24 +288,19 @@ def train_ppo_agent(ppo_agent, warehouse_env, num_episodes=1000):
         while not done:
             action, log_prob = ppo_agent.select_action(state)
             next_state, reward, done = warehouse_env.step(action)
-            # Store reward, done flag, and next state
             ppo_agent.store_reward_and_next_state(len(ppo_agent.memory) - 1, reward, done, next_state)
             state = next_state
             total_reward += reward
 
-        # Update PPO agent after each episode
         ppo_agent.update()
-
         print(f"Episode {episode + 1}/{num_episodes}, Total Reward: {total_reward}")
 
-# -----------------主函数---------------------
+
 if __name__ == "__main__":
-    # Initialize networks
-    policy_network = PolicyNetwork()
+    # 初始化网络
+    policy_network = PolicyNetwork(output_dim=7)
     value_network = ValueNetwork()
-
-    # Initialize PPO agent
+    # 初始化PPO代理
     ppo_agent = PPOAgent(policy_network, value_network)
-
-    # Train the PPO agent
+    # 训练PPO代理
     train_ppo_agent(ppo_agent, warehouse, num_episodes=1000)

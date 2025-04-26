@@ -9,9 +9,12 @@
 import numpy as np
 import random
 import pickle
-from environment.generat_order import GenerateData
+from data.generat_order import GenerateData
 import gym
+from environment.class_public import Config
 
+
+# 商品类
 class Item:
     def __init__(self, item_id, bin_id, position, area_id, pick_point_id):
         self.item_id = item_id  # 商品的编号
@@ -52,10 +55,8 @@ class PickPoint:
         self.area_id = area_id  # 拣货位所属区域的编号
         self.item_ids = item_ids  # 拣货位中的商品编号列表
         self.storage_bin_ids = storage_bin_ids  # 拣货位对应的储货位编号列表
-        # 拣货位的机器人对象队列
-        self.robot_queue = []
-        # 拣货位的拣货员对象
-        self.picker = None
+        self.robot_queue = [] # 当前拣货位的机器人对象队列
+        self.picker = None  # 拣货员对象
         # 拣货位的未拣货商品列表
         self.unpicked_items = []
 
@@ -70,15 +71,17 @@ class PickPoint:
             return False
 
 
-class Robot:
+class Robot(Config):
     def __init__(self, position):
+        super().__init__()
+        self.parameter = self.parameters["robot"]  # 机器人参数
         self.position = position  # 机器人的位置
         self.pick_point = None  # 机器人当前拣货位
         self.order = None  # 机器人关联的订单
         self.item_pick_order = []  # 机器人剩余未拣选商品的对象列表（按拣选顺序排序）
         self.state = 'idle'  # 机器人所处状态：'idle', 'busy'
-        self.speed = 2  # 机器人移动速度
-        self.unit_time_cost = 1  # 机器人工作单位时间成本
+        self.speed = self.parameter["robot_speed"]  # 机器人移动速度
+        self.unit_time_cost = self.parameter["unit_run_cost"]  # 机器人单位运行成本
         self.pick_point_complete_time = 0  # 机器人在当前拣货位的拣货完成时间
         self.move_to_pick_point_time = 0  # 机器人移动到拣货位的时间
         self.move_to_depot_time = 0  # 机器人移动到depot_position的时间
@@ -118,21 +121,27 @@ class Robot:
             return items
         return None
 
-class Picker:
+class Picker(Config):
     def __init__(self, area_id):
+        super().__init__()  # 调用父类的构造函数
+        self.parameter = self.parameters["picker"]  # 拣货员参数
         self.pick_point = None  # 拣货员当前拣货位
         self.position = None  # 拣货员的位置
         self.item = None  # 拣货员待拣选或正在拣选的商品
         self.state = 'idle'  # 拣货员状态：'idle', 'busy'
-        self.speed = 2  # 拣货员移动速度
+        self.speed = self.parameter["picker_speed"]  # 拣货员移动速度
         self.area_id = area_id  # 拣货员所在区域的编号
-        self.unit_time_cost = 1  # 拣货员工作单位时间成本
+        self.unit_time_cost = self.parameter["unit_time_cost"]  # 拣货员单位时间雇佣成本
         self.storage_bins = []  # 拣货员负责的储货位列表
         self.pick_points = []  # 拣货员负责的拣货位列表
         self.working_time = 0  # 拣货员工作时间
         self.pick_start_time = 0  # 拣货员在当前拣货位拣货开始时间
         self.pick_end_time = 0  # 拣货员在当前拣货位拣货结束时间
         self.remove = False  # 拣货员移除标识
+        # 辞退成本
+        self.unit_fire_cost = self.parameter["unit_fire_cost"]
+        # 聘用时刻
+        self.hire_time = None
 
     # 根据负责的拣货位列表中的拣货位的坐标计算拣货员的初始位置（取各拣货位的坐标均值）
     @ property
@@ -324,7 +333,9 @@ class WarehouseEnv(gym.Env):
                         robot.remove = True  # 设置机器人移除标识
 
     def reset(self, orders):
-        """重置仓库环境"""
+        """
+        重置仓库环境
+        """
         # 重置仓库中的机器人和拣货员对象信息
         self.robots = []  # 机器人列表
         self.pickers = []  # 拣货员列表
@@ -558,12 +569,14 @@ class WarehouseEnv(gym.Env):
         # depot_position位置的机器人数量，即空闲机器人数量
         n_robots_at_depot = len([robot for robot in self.robots if robot.state == 'idle'])
         # 机器人总数
-        n_robots = len(self.robots)
+        n_robots = len([robot for robot in self.robots if robot.remove is False])
         # 拣货员总数
-        n_pickers = len(self.pickers)
+        n_pickers = len([picker for picker in self.pickers if picker.remove is False])
+        # 每个区域的拣货员数量列表
+        n_pickers_area = [len(self.pickers_area[area_id]) for area_id in self.area_ids]
         # 所有状态特征组合成state字典
         self.state = {'robot_queue_list': robot_queue_list, 'picker_list': picker_list, 'unpicked_items_list': unpicked_items_list,
-                 'n_robots_at_depot': n_robots_at_depot, 'n_robots': n_robots, 'n_pickers': n_pickers}
+                      'n_robots': n_robots, 'n_pickers_area': n_pickers_area}
         return self.state
 
     def compute_reward(self):
@@ -616,7 +629,7 @@ class WarehouseEnv(gym.Env):
 if __name__ == "__main__":
     # 初始化仓库环境
     N_l = 10  # 单个货架中储货位的数量
-    area_dict = {'area1': 3, 'area2': 3}  # 仓库中每个区域包含的巷道数量
+    area_dict = {'area1': 3, 'area2': 3, 'area3': 3, 'area4': 3, 'area5': 3, 'area6': 3}  # 仓库中每个区域包含的巷道数量
     N_w = sum(area_dict.values())  # 巷道的数量
     area_ids = list(area_dict.keys())
     S_l = 1  # 储货位的长度
@@ -631,17 +644,19 @@ if __name__ == "__main__":
 
     # 基于仓库中的商品创建一个月内的订单对象，每个订单包含多个商品，订单到达时间服从泊松分布，仿真周期设置为一个月
     # 一个月的总秒数
-    total_seconds = 7 * 24 * 3600  # 7天
+    total_seconds = 6 * 24 * 3600  # 7天
 
     # 订单到达泊松分布参数
     poisson_parameter = 60  # 泊松分布参数, 60秒一个订单到达
+
     # # 生成一个月内的订单数据，并保存到orders.pkl文件中
     # generate_orders = GenerateData(warehouse, total_seconds, poisson_parameter)  # 生成订单数据对象
     # generate_orders.generate_orders()  # 生成一个月内的订单数据
 
-    # 读取一个月内的订单数据，orders.pkl文件中
-    with open("orders.pkl", "rb") as f:
-        orders = pickle.load(f)
+    # 订单数据保存和读取位置
+    file_order = 'D:\Python project\DRL_Warehouse\data'
+    with open(file_order + "\orders_{}.pkl".format(poisson_parameter), "rb") as f:
+        orders = pickle.load(f)  # 读取订单数据
 
     # 基于上述一个月内的订单数据和仓库环境数据，实现仓库环境的仿真
     warehouse.total_time = total_seconds # 仿真总时间
