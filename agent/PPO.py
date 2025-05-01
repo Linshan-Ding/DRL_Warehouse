@@ -51,12 +51,12 @@ class PolicyNetwork(nn.Module):
         self.output_dim = output_dim
 
         # CNN层
-        self.conv1 = nn.Conv2d(input_channels, 16, kernel_size=3, stride=1, padding=1)
-        self.conv2 = nn.Conv2d(16, 1, kernel_size=3, stride=1, padding=1)
+        self.conv1 = nn.Conv2d(input_channels, 2, kernel_size=3, stride=1, padding=1)
+        self.conv2 = nn.Conv2d(2, 1, kernel_size=3, stride=1, padding=1)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
 
         # 计算全连接层输入尺寸
-        conv_output_size = (input_height // 2) * (input_width // 2) * 1  # 9 * 5 * 32 = 1600
+        conv_output_size = (input_height // 2) * (input_width // 2) * 1  # 9 * 5 * 1 = 45
 
         # 全连接层
         self.fc1 = nn.Linear(conv_output_size + scalar_dim, hidden_dim)
@@ -90,8 +90,8 @@ class ValueNetwork(nn.Module):
         super(ValueNetwork, self).__init__()
 
         # CNN层
-        self.conv1 = nn.Conv2d(input_channels, 16, kernel_size=3, stride=1, padding=1)
-        self.conv2 = nn.Conv2d(16, 1, kernel_size=3, stride=1, padding=1)
+        self.conv1 = nn.Conv2d(input_channels, 2, kernel_size=3, stride=1, padding=1)
+        self.conv2 = nn.Conv2d(2, 1, kernel_size=3, stride=1, padding=1)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
 
         # 计算全连接层输入尺寸
@@ -143,13 +143,13 @@ class PPOAgent:
         self.policy_old.eval()
         with torch.no_grad():
             # 提取矩阵和标量输入
-            matrix_inputs = torch.FloatTensor([
+            matrix_inputs = torch.FloatTensor(np.array([
                 state['robot_queue_list'],
                 state['picker_list'],
                 state['unpicked_items_list']
-            ]).unsqueeze(0).to(self.device)  # (1, 3, 21, 10)
+            ])).unsqueeze(0).to(self.device)  # (1, 3, 21, 10)
 
-            scalar_inputs = torch.FloatTensor([state['n_robots']] + state['n_pickers_area']).unsqueeze(0).to(self.device)  # (1, 7)
+            scalar_inputs = torch.FloatTensor(np.array([state['n_robots']] + state['n_pickers_area'])).unsqueeze(0).to(self.device)  # (1, 7)
 
             mean, std = self.policy_old(matrix_inputs, scalar_inputs)
             dist = Normal(mean, std)
@@ -205,38 +205,38 @@ class PPOAgent:
             next_states.append(transition['next_state'])
 
         # 转换为张量
-        matrix_inputs = torch.FloatTensor([
+        matrix_inputs = torch.FloatTensor(np.array([
             [
                 state['robot_queue_list'],
                 state['picker_list'],
                 state['unpicked_items_list']
             ] for state in states
-        ]).to(self.device)  # (batch, 3, 21, 10)
+        ])).to(self.device)  # (batch, 3, 21, 10)
 
-        scalar_inputs = torch.FloatTensor([
+        scalar_inputs = torch.FloatTensor(np.array([
             [state['n_robots']] + state['n_pickers_area']
             for state in states
-        ]).to(self.device)  # (batch, 7)
+        ])).to(self.device)  # (batch, 7)
 
-        actions = torch.FloatTensor(actions).to(self.device)  # (batch, 7)
+        actions = torch.FloatTensor(np.array(actions)).to(self.device)  # (batch, 7)
         old_logprobs = torch.FloatTensor(logprobs).to(self.device)  # (batch,)
 
         # 计算值和优势
         with torch.no_grad():
             values = self.value_network(matrix_inputs, scalar_inputs).squeeze(1)  # (batch,)
 
-            next_matrix_inputs = torch.FloatTensor([
+            next_matrix_inputs = torch.FloatTensor(np.array([
                 [
                     state['robot_queue_list'],
                     state['picker_list'],
                     state['unpicked_items_list']
                 ] for state in next_states
-            ]).to(self.device)  # (batch, 3, 21, 10)
+            ])).to(self.device)  # (batch, 3, 21, 10)
 
-            next_scalar_inputs = torch.FloatTensor([
+            next_scalar_inputs = torch.FloatTensor(np.array([
                 [state['n_robots']] + state['n_pickers_area']
                 for state in next_states
-            ]).to(self.device)  # (batch, 7)
+            ])).to(self.device)  # (batch, 7)
 
             next_values = self.value_network(next_matrix_inputs, next_scalar_inputs).squeeze(1)  # (batch,)
 

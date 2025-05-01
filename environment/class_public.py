@@ -1,7 +1,7 @@
 """
 定义了公共的类
 """
-
+# -------------参数定义类----------------
 class Config:
     def __init__(self):
         """
@@ -36,7 +36,7 @@ class Config:
 
         return parameters
 
-
+# -------------订单类----------------
 class Order(Config):
     def __init__(self, order_id, items, arrive_time=0, due_time=None):
         """
@@ -61,18 +61,15 @@ class Order(Config):
         self.due_time = due_time
         # 订单单位延期成本
         self.unit_delay_cost = self.parameter["unit_delay_cost"]
-        # 订单拣选完成时间
-        self.complete_time = None
 
     # 订单延期总成本
-    @ property
     def total_delay_cost(self, current_time):
         """
         计算订单延期总成本
         :param current_time: 当前时间
         :return: 订单延期总成本
         """
-        if self.complete_time is not None:
+        if self.complete_time is None:
             if current_time < self.due_time:
                 return 0
             else:
