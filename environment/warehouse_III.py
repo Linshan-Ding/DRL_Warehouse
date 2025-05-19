@@ -602,10 +602,22 @@ class WarehouseEnv(gym.Env):
     def assign_pick_point_to_picker(self, area_id):
         """当前区域同时存在空闲拣货员和待分配拣货员的拣货位时"""
         while len(self.idle_pickers[area_id]) > 0 and len(self.idle_pick_points[area_id]) > 0:
-            # 随机选择一个待分配拣货位
-            pick_point = random.choice(self.idle_pick_points[area_id])
-            # 选择距离该拣货位最近的空闲拣货员
-            picker = min(self.idle_pickers[area_id], key=lambda picker: self.shortest_path_between_pick_points(picker, pick_point))
+            # 获取当前区域所有空闲拣货员和待分配拣货位的组合
+            idle_pickers_in_area = self.idle_pickers[area_id]
+            idle_pick_points_in_area = self.idle_pick_points[area_id]
+
+            # 找出距离最小的拣货员-拣货位对
+            min_distance = float('inf')
+            best_pair = None
+            for picker in idle_pickers_in_area:
+                for pick_point in idle_pick_points_in_area:
+                    distance = self.shortest_path_between_pick_points(picker, pick_point)
+                    if distance < min_distance:
+                        min_distance = distance
+                        best_pair = (picker, pick_point)
+
+            # 分配拣货员和拣货位
+            picker, pick_point = best_pair
             # 为拣货员分配拣货位
             picker.pick_point = pick_point
             # 为拣货位分配拣货员
