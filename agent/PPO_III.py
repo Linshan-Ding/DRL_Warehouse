@@ -58,6 +58,9 @@ class PolicyNetwork(nn.Module):
         # 计算全连接层输入尺寸
         conv_output_size = (input_height // 2) * (input_width // 2) * 1  # 9 * 5 * 1 = 45
 
+        # 层归一化
+        self.layer_norm = nn.LayerNorm(conv_output_size + scalar_dim)
+
         # 全连接层
         self.fc1 = nn.Linear(conv_output_size + scalar_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
@@ -77,6 +80,7 @@ class PolicyNetwork(nn.Module):
 
         # 拼接标量输入
         x = torch.cat((x, scalar_inputs), dim=1)       # (batch_size, 1607)
+        x = self.layer_norm(x)                          # (batch_size, 1607)
         x = self.activation(self.fc1(x))               # (batch_size, hidden_dim)
         x = self.activation(self.fc2(x))               # (batch_size, hidden_dim)
         mean = self.action_mean(x)                      # (batch_size, 7)
@@ -97,6 +101,9 @@ class ValueNetwork(nn.Module):
         # 计算全连接层输入尺寸
         conv_output_size = (input_height // 2) * (input_width // 2) * 1  # 9 * 5 * 32 = 1600
 
+        # 层归一化
+        self.layer_norm = nn.LayerNorm(conv_output_size + scalar_dim)
+
         # 全连接层
         self.fc1 = nn.Linear(conv_output_size + scalar_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
@@ -113,6 +120,7 @@ class ValueNetwork(nn.Module):
 
         # 拼接标量输入
         x = torch.cat((x, scalar_inputs), dim=1)       # (batch_size, 1607)
+        x = self.layer_norm(x)                          # (batch_size, 1607)
         x = self.activation(self.fc1(x))               # (batch_size, hidden_dim)
         x = self.activation(self.fc2(x))               # (batch_size, hidden_dim)
         state_value = self.value_head(x)                # (batch_size, 1)
