@@ -1,6 +1,10 @@
 """
 智能仓库人机协同拣选系统仿真环境
-用于订单数据的生成和读取
+1、待分配拣货位选择最近的空闲拣货员
+2、机器人和拣货员被移除后，完成当前订单拣选任务后，再移除
+3、每个区最少一个拣货员，整个仓库最少一个机器人
+4、同一拣货位的不同商品的拣选时间需要叠加
+5、机器人移动到depot_position后，进行打包操作，打包时间为定值
 """
 import numpy as np
 import random
@@ -423,10 +427,12 @@ class WarehouseEnv(gym.Env):
         # 一天的仿真时间
         one_day = 24 * 3600
         # 当前step结束时间
-        end_time = self.current_time + one_day
+        end_time = self.current_time + one_day * 6
 
         # 仿真该step: 从当前时间到下一个决策点
-        while self.current_time < end_time and len(self.orders_not_arrived) > 0:  # 当前时间小于结束时间
+        while self.current_time < self.total_time and len(self.orders_not_arrived) > 0:  # 当前时间小于结束时间
+            # print("当前时间", self.current_time)
+            # print(len(self.orders_not_arrived), "个订单未到达")
             """为机器人和拣货员分配订单和拣货位，完成该离散点的决策"""
             # 若存在待分配订单和空闲机器人，则为机器人分配订单
             self.assign_order_to_robot()

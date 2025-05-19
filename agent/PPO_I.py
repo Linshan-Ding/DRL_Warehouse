@@ -1,12 +1,12 @@
 """
 PPO agent：Proximal Policy Optimization
-调整每个决策点机器人和拣货员的数量
+调整每个决策点机器人和拣货员的数量：拣货员+日租
 """
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.distributions import Normal
-from environment.warehouse import WarehouseEnv  # 导入仓库环境类
+from environment.warehouse_I import WarehouseEnv  # 导入仓库环境类
 import numpy as np
 import copy
 import pickle # 用于读取订单数据
@@ -16,7 +16,7 @@ from data.generat_order import GenerateData
 N_l = 10  # 单个货架中储货位的数量
 area_dict = {'area1': 3, 'area2': 3, 'area3': 3, 'area4': 3, 'area5': 3, 'area6': 3}  # 仓库中每个区域包含的巷道数量
 N_w = sum(area_dict.values())  # 巷道的数量
-area_ids = list(area_dict.keys())
+area_ids = list(area_dict.keys())  # 仓库中每个区域的ID
 S_l = 1  # 储货位的长度
 S_w = 1  # 储货位的宽度
 S_b = 2  # 底部通道的宽度
@@ -26,7 +26,7 @@ depot_position = (0, 0)  # 机器人的起始位置
 # 初始化仓库环境
 warehouse = WarehouseEnv(N_l, N_w, S_l, S_w, S_b, S_d, S_a, area_dict, area_ids, depot_position)
 # 一个月的总秒数
-total_seconds = 6 * 24 * 3600  # 7天
+total_seconds = 6 * 24 * 3600  # 6天
 
 # 订单数据保存和读取位置
 file_order = 'D:\Python project\DRL_Warehouse\data'
@@ -160,7 +160,7 @@ class PPOAgent:
             log_prob = log_prob.cpu().numpy()[0]
 
             # 动作范围限制
-            action = np.clip(action, -5, 5)
+            action = np.clip(action, -500, 500)
 
             # 如果动作需要为整数，进行四舍五入
             action = np.round(action).astype(int)
@@ -281,7 +281,8 @@ class PPOAgent:
 # 定义训练函数
 def train_ppo_agent(ppo_agent, warehouse_env, num_episodes=1000):
     for episode in range(num_episodes):
-        state = warehouse_env.reset(orders)
+        orders_object = copy.deepcopy(orders)  # 深拷贝订单数据
+        state = warehouse_env.reset(orders_object) # 重置环境并获取初始状态
         done = False
         total_reward = 0
 
@@ -291,6 +292,7 @@ def train_ppo_agent(ppo_agent, warehouse_env, num_episodes=1000):
             ppo_agent.store_reward_and_next_state(len(ppo_agent.memory) - 1, reward, done, next_state)
             state = next_state
             total_reward += reward
+            print(done)
 
         ppo_agent.update()
         print(f"Episode {episode + 1}/{num_episodes}, Total Reward: {total_reward}")
