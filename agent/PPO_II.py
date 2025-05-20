@@ -107,7 +107,7 @@ class ValueNetwork(nn.Module):
 
 # 定义PPO代理
 class PPOAgent:
-    def __init__(self, policy_network, value_network, lr=3e-4, gamma=0.99, eps_clip=0.2, K_epochs=4):
+    def __init__(self, policy_network, value_network, lr=3e-4, gamma=0.99, eps_clip=0.2, K_epochs=10):
         self.policy = policy_network
         self.policy_old = copy.deepcopy(policy_network)
         self.policy_old.eval()
