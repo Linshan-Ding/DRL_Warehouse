@@ -733,13 +733,18 @@ if __name__ == "__main__":
 
     # 仿真总时间一个月
     warehouse.reset(orders)  # 重置仓库环境
+    total_reward = 0  # 总奖励
     while not warehouse.done:
-        n_robot = random.randint(-5, -1)  # 机器人数量调整值
-        n_picker_area = random.randint(-5, -1)  # 拣货员数量调整值
+        n_robot = random.randint(-50, 50)  # 机器人数量调整值
+        n_picker_area = random.randint(-500, 50)  # 拣货员数量调整值
         action = [n_robot] + [n_picker_area] * len(warehouse.area_ids)  # 每个区域的拣货员数量增加1，机器人数量增加1
         # 仓库环境的仿真步进函数
         state, reward, done = warehouse.step(action)
+        total_reward += reward  # 累计奖励
         # 输出当前状态
         print(f"Current state: {warehouse.state}")
         print(f"Current time: {warehouse.current_time}")  # 当前时间
         print("-----------------------------------------------------------------------------------------------------------------------------------------------")
+
+    # 仿真结束后输出总奖励
+    print(f"Total reward: {total_reward}")
