@@ -15,14 +15,16 @@ from environment.class_public import Config
 
 
 # 商品类
-class Item:
+class Item(Config):
     def __init__(self, item_id, bin_id, position, area_id, pick_point_id):
+        super().__init__() # 调用父类的构造函数
+        self.parameter = self.parameters["item"]  # 商品参数
         self.item_id = item_id  # 商品的编号
         self.bin_id = bin_id  # 商品所在的储货位编号
         self.position = position  # 商品所在的位置
         self.area_id = area_id  # 商品所在的区域编号
         self.pick_point_id = pick_point_id  # 商品所属拣货位的编号
-        self.pick_time = 1  # 拣选时间
+        self.pick_time = self.parameter["pick_time"]  # 商品拣选时间
         self.pick_complete_time = 0  # 商品拣选完成时间
 
 
@@ -81,7 +83,7 @@ class Robot(Config):
         self.item_pick_order = []  # 机器人剩余未拣选商品的对象列表（按拣选顺序排序）
         self.state = 'idle'  # 机器人所处状态：'idle', 'busy'
         self.speed = self.parameter["robot_speed"]  # 机器人移动速度
-        self.unit_time_cost = self.parameter["unit_run_cost"]  # 机器人单位运行成本
+        self.unit_time_cost = self.parameter["long_term_unit_run_cost"]  # 机器人单位运行成本
         self.pick_point_complete_time = 0  # 机器人在当前拣货位的拣货完成时间
         self.move_to_pick_point_time = 0  # 机器人移动到拣货位的时间
         self.move_to_depot_time = 0  # 机器人移动到depot_position的时间
@@ -146,7 +148,7 @@ class Picker(Config):
         self.state = 'idle'  # 拣货员状态：'idle', 'busy'
         self.speed = self.parameter["picker_speed"]  # 拣货员移动速度
         self.area_id = area_id  # 拣货员所在区域的编号
-        self.unit_time_cost = self.parameter["unit_time_cost"]  # 拣货员单位时间雇佣成本
+        self.unit_time_cost = self.parameter["long_term_unit_time_cost"]  # 拣货员单位时间雇佣成本
         self.storage_bins = []  # 拣货员负责的储货位列表
         self.pick_points = []  # 拣货员负责的拣货位列表
         self.working_time = 0  # 拣货员工作时间
@@ -184,20 +186,24 @@ class Picker(Config):
 # 包括机器人、拣货员、拣货位、储货位和商品
 # 步进函数step()实现仓库环境的仿真
 # 动作为每间隔24个小时调整每个区域的拣货员和仓库中总的机器人的数量
-class WarehouseEnv(gym.Env):
-    def __init__(self, N_l, N_w, S_l, S_w, S_b, S_d, S_a, are_dict, are_ids, depot_position):
+class WarehouseEnv(gym.Env, Config):
+    def __init__(self):
+        super().__init__()  # 调用父类的构造函数
+        self.parameter = self.parameters["warehouse"]  # 仓库参数
         # 仓库环境参数
-        self.N_l = N_l  # 单个货架中储货位的数量
-        self.N_w = N_w  # 巷道的数量
-        self.S_l = S_l  # 储货位的长度
-        self.S_w = S_w  # 储货位的宽度
-        self.S_b = S_b  # 底部通道的宽度
-        self.S_d = S_d  # 仓库的出入口处的宽度
-        self.S_a = S_a  # 巷道的宽度
-        self.area_ids = are_ids  # 仓库区域编号列表
-        self.area_dict = are_dict  # 仓库区域字典
-        self.depot_position = depot_position  # 机器人的起始位置
-        self.pack_time = 10  # 机器人拣完订单后的打包时间
+        self.N_l = self.parameter["shelf_capacity"]  # 单个货架中储货位的数量
+        self.N_a = self.parameter["area_num"]  # 仓库区域数量
+        self.N_ai = self.parameter["aisle_num"]  # 仓库每个区域中巷道数量
+        self.N_w = self.parameter["area_num"] * self.parameter["aisle_num"]  # 仓库巷道数量
+        self.S_l = self.parameter["shelf_length"]  # 储货位的长度
+        self.S_w = self.parameter["shelf_width"]  # 储货位的宽度
+        self.S_b = self.parameter["aisle_width"]  # 底部通道的宽度
+        self.S_d = self.parameter["entrance_width"]  # 仓库的出入口处的宽度
+        self.S_a = self.parameter["aisle_width"]  # 巷道的宽度
+        self.area_dict = {'area{}'.format(i): self.N_ai for i in range(1, self.N_a + 1)}  # 仓库区域字典
+        self.area_ids = list(self.area_dict.keys())  # 仓库区域ID列表
+        self.depot_position = self.parameter["depot_position"]  # 仓库起始点位置
+        self.pack_time = self.parameters["order"]["pack_time"]  # 订单打包时间
         self.total_time = None  # 仿真总时间
 
         # 仓库固定属性
@@ -205,7 +211,7 @@ class WarehouseEnv(gym.Env):
         self.storage_bins = {}  # 储货位字典
         self.items = {}  # 商品字典
         self.pick_points_area = {area_id: [] for area_id in self.area_ids}  # 每个区域的拣货位列表字典
-        self.depot_object = Depot(depot_position)  # 仓库起始点对象
+        self.depot_object = Depot(self.depot_position)  # 仓库起始点对象
         # 构建仓库图
         self.create_warehouse_graph()
 
@@ -425,9 +431,7 @@ class WarehouseEnv(gym.Env):
         # 执行动作，调整仓库中的机器人和拣货员数量
         self.adjust_robots_and_pickers(self.adjust_robots, self.adjust_pickers_dict)
         # 一天的仿真时间
-        one_day = 24 * 3600
-        # 当前step结束时间
-        end_time = self.current_time + one_day * 6
+        one_day = 8 * 3600
 
         # 仿真该step: 从当前时间到下一个决策点
         while self.current_time < self.total_time and len(self.orders_not_arrived) > 0:  # 当前时间小于结束时间
@@ -701,26 +705,14 @@ class WarehouseEnv(gym.Env):
 
 if __name__ == "__main__":
     # 初始化仓库环境
-    N_l = 10  # 单个货架中储货位的数量
-    area_dict = {'area1': 3, 'area2': 3, 'area3': 3, 'area4': 3, 'area5': 3, 'area6': 3}  # 仓库中每个区域包含的巷道数量
-    N_w = sum(area_dict.values())  # 巷道的数量
-    area_ids = list(area_dict.keys())
-    S_l = 1  # 储货位的长度
-    S_w = 1  # 储货位的宽度
-    S_b = 2  # 底部通道的宽度
-    S_d = 2  # 仓库的出入口处的宽度
-    S_a = 2  # 巷道的宽度
-    depot_position = (0, 0)  # 机器人的起始位置
-
-    # 初始化仓库环境
-    warehouse = WarehouseEnv(N_l, N_w, S_l, S_w, S_b, S_d, S_a, area_dict, area_ids, depot_position)
+    warehouse = WarehouseEnv()
 
     # 基于仓库中的商品创建一个月内的订单对象，每个订单包含多个商品，订单到达时间服从泊松分布，仿真周期设置为一个月
     # 一个月的总秒数
-    total_seconds = 7 * 24 * 3600  # 7天
+    total_seconds = 2 * 8 * 3600  # 2天
 
     # 订单到达泊松分布参数
-    poisson_parameter = 60  # 泊松分布参数, 60秒一个订单到达
+    poisson_parameter = 30  # 泊松分布参数, 60秒一个订单到达
 
     # # 生成一个月内的订单数据，并保存到orders.pkl文件中
     # generate_orders = GenerateData(warehouse, total_seconds, poisson_parameter)  # 生成订单数据对象

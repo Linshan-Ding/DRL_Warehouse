@@ -11,42 +11,21 @@ import numpy as np
 import copy
 import pickle # 用于读取订单数据
 from data.generat_order import GenerateData
+from visdom import Visdom
+import csv
+
+# 设置训练数据可视化
+viz = Visdom(env='PPO_II')
+viz.line([-4780647], [0], win='reward', opts=dict(title='Reward', xlabel='Episode', ylabel='Reward'))
 
 # -----------------初始化仓库环境---------------------
-N_l = 10  # 单个货架中储货位的数量
-area_dict = {'area1': 3, 'area2': 3, 'area3': 3, 'area4': 3, 'area5': 3, 'area6': 3}  # 仓库中每个区域包含的巷道数量
-N_w = sum(area_dict.values())  # 巷道的数量
-area_ids = list(area_dict.keys())  # 仓库中每个区域的ID
-S_l = 1  # 储货位的长度
-S_w = 1  # 储货位的宽度
-S_b = 2  # 底部通道的宽度
-S_d = 2  # 仓库的出入口处的宽度
-S_a = 2  # 巷道的宽度
-depot_position = (0, 0)  # 机器人的起始位置
-# 初始化仓库环境
-warehouse = WarehouseEnv(N_l, N_w, S_l, S_w, S_b, S_d, S_a, area_dict, area_ids, depot_position)
-# 一个月的总秒数
-total_seconds = 6 * 24 * 3600  # 6天
-
-# 订单数据保存和读取位置
-file_order = 'D:\Python project\DRL_Warehouse\data'
-# 订单到达泊松分布参数
-poisson_parameter = 60  # 泊松分布参数, 60秒一个订单到达
-
-# # 生成一个月内的订单数据，并保存到orders.pkl文件中
-# generate_orders = GenerateData(warehouse, total_seconds, poisson_parameter)  # 生成订单数据对象
-# generate_orders.generate_orders()  # 生成一个月内的订单数据
-
-# 读取一个月内的订单数据，orders.pkl文件中
-with open(file_order+ "\orders_{}.pkl".format(poisson_parameter), "rb") as f:
-    orders = pickle.load(f)  # 读取订单数据
-
-# 基于上述一个月内的订单数据和仓库环境数据，实现仓库环境的仿真
-warehouse.total_time = total_seconds # 仿真总时间
+warehouse = WarehouseEnv()
+N_w = warehouse.N_w  # 仓库宽度
+N_l = warehouse.N_l  # 仓库长度
 
 # 定义策略网络
 class PolicyNetwork(nn.Module):
-    def __init__(self, input_channels=3, input_height=18, input_width=10, scalar_dim=7, hidden_dim=128, output_dim=7):
+    def __init__(self, input_channels=3, input_height=N_w, input_width=N_l, scalar_dim=7, hidden_dim=128, output_dim=7):
         super(PolicyNetwork, self).__init__()
         self.output_dim = output_dim
 
@@ -90,7 +69,7 @@ class PolicyNetwork(nn.Module):
 
 # 定义值网络
 class ValueNetwork(nn.Module):
-    def __init__(self, input_channels=3, input_height=18, input_width=10, scalar_dim=7, hidden_dim=128):
+    def __init__(self, input_channels=3, input_height=N_w, input_width=N_l, scalar_dim=7, hidden_dim=128):
         super(ValueNetwork, self).__init__()
 
         # CNN层
@@ -305,8 +284,39 @@ def train_ppo_agent(ppo_agent, warehouse_env, num_episodes=1000):
         ppo_agent.update()
         print(f"Episode {episode + 1}/{num_episodes}, Total Reward: {total_reward}")
 
+        # 可视化训练数据
+        viz.line([total_reward], [episode + 1], win='reward', update='append')
+
+        # 保存模型
+        if (episode + 1) % 100 == 0:
+            torch.save(ppo_agent.policy.state_dict(), f"policy_network_PPO_II_{episode + 1}.pth")
+            torch.save(ppo_agent.value_network.state_dict(), f"value_network_PPO_II_{episode + 1}.pth")
+
+        # 保存训练数据
+        with open('training_data_PPO_II.csv', 'a', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([episode + 1, total_reward])
+
 
 if __name__ == "__main__":
+    # 订单数据保存和读取位置
+    file_order = 'D:\Python project\DRL_Warehouse\data'
+    # 订单到达泊松分布参数
+    poisson_parameter = 30  # 泊松分布参数, 30秒一个订单到达
+
+    # # 生成一个月内的订单数据，并保存到orders.pkl文件中
+    # generate_orders = GenerateData(warehouse, total_seconds, poisson_parameter)  # 生成订单数据对象
+    # generate_orders.generate_orders()  # 生成一个月内的订单数据
+
+    # 读取一个月内的订单数据，orders.pkl文件中
+    with open(file_order + "\orders_{}.pkl".format(poisson_parameter), "rb") as f:
+        orders = pickle.load(f)  # 读取订单数据
+
+    # 一个月的总秒数
+    total_seconds = 2 * 8 * 3600  # 2天
+    # 基于上述一个月内的订单数据和仓库环境数据，实现仓库环境的仿真
+    warehouse.total_time = total_seconds  # 仿真总时间
+
     # 初始化网络
     policy_network = PolicyNetwork(output_dim=7)
     value_network = ValueNetwork()
