@@ -63,7 +63,7 @@ if __name__ == "__main__":
     # 实例化仓库对象
     warehouse = WarehouseEnv()
     # 一个月的总秒数
-    total_seconds = 3 * 8 * 3600  # 31天
+    total_seconds = 31 * 8 * 3600  # 31天
 
     # 订单数据保存和读取位置
     file_order = 'D:\Python project\DRL_Warehouse\data'

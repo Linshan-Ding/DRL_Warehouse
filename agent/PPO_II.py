@@ -13,10 +13,11 @@ import pickle # 用于读取订单数据
 from data.generat_order import GenerateData
 from visdom import Visdom
 import csv
+from environment.class_public import Config
 
 # 设置训练数据可视化
 viz = Visdom(env='PPO_II')
-viz.line([-4780647], [0], win='reward', opts=dict(title='Reward', xlabel='Episode', ylabel='Reward'))
+viz.line([4780647], [0], win='reward_II', opts=dict(title='Reward2', xlabel='Episode', ylabel='Reward'))
 
 # -----------------初始化仓库环境---------------------
 warehouse = WarehouseEnv()
@@ -106,19 +107,20 @@ class ValueNetwork(nn.Module):
         return state_value
 
 # 定义PPO代理
-class PPOAgent:
-    def __init__(self, policy_network, value_network, lr=3e-4, gamma=0.99, eps_clip=0.2, K_epochs=10):
+class PPOAgent(Config):
+    def __init__(self, policy_network, value_network):
+        super().__init__()  # 调用父类的构造函数
         self.policy = policy_network
         self.policy_old = copy.deepcopy(policy_network)
         self.policy_old.eval()
 
         self.value_network = value_network
-        self.value_optimizer = optim.Adam(self.value_network.parameters(), lr=lr)
-        self.policy_optimizer = optim.Adam(self.policy.parameters(), lr=lr)
+        self.value_optimizer = optim.Adam(self.value_network.parameters(), lr=self.parameters["ppo"]["learning_rate"])
+        self.policy_optimizer = optim.Adam(self.policy.parameters(), lr=self.parameters["ppo"]["learning_rate"])
 
-        self.gamma = gamma
-        self.eps_clip = eps_clip
-        self.K_epochs = K_epochs
+        self.gamma = self.parameters["ppo"]["gamma"]
+        self.eps_clip = self.parameters["ppo"]["clip_range"]
+        self.K_epochs = self.parameters["ppo"]["n_epochs"]
 
         self.memory = []
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -237,7 +239,6 @@ class PPOAgent:
             mean, std = self.policy(matrix_inputs, scalar_inputs)
             dist = Normal(mean, std)
             logprobs_new = dist.log_prob(actions).sum(dim=1)
-            entropy = dist.entropy().sum(dim=1)
 
             ratios = torch.exp(logprobs_new - old_logprobs)
 
@@ -248,14 +249,11 @@ class PPOAgent:
             value = self.value_network(matrix_inputs, scalar_inputs).squeeze(1)
             value_loss = nn.MSELoss()(value, targets)
 
-            entropy_loss = -0.01 * entropy.mean()
-
-            loss = policy_loss + 0.5 * value_loss + entropy_loss
-
             # 反向传播与优化
             self.policy_optimizer.zero_grad()
             self.value_optimizer.zero_grad()
-            loss.backward()
+            policy_loss.backward()
+            value_loss.backward()
             self.policy_optimizer.step()
             self.value_optimizer.step()
 
@@ -285,10 +283,10 @@ def train_ppo_agent(ppo_agent, warehouse_env, num_episodes=1000):
         print(f"Episode {episode + 1}/{num_episodes}, Total Reward: {total_reward}")
 
         # 可视化训练数据
-        viz.line([total_reward], [episode + 1], win='reward', update='append')
+        viz.line([-total_reward], [episode + 1], win='reward_II', update='append')
 
         # 保存模型
-        if (episode + 1) % 100 == 0:
+        if (episode + 1) % 500 == 0:
             torch.save(ppo_agent.policy.state_dict(), f"policy_network_PPO_II_{episode + 1}.pth")
             torch.save(ppo_agent.value_network.state_dict(), f"value_network_PPO_II_{episode + 1}.pth")
 
@@ -313,7 +311,7 @@ if __name__ == "__main__":
         orders = pickle.load(f)  # 读取订单数据
 
     # 一个月的总秒数
-    total_seconds = 2 * 8 * 3600  # 2天
+    total_seconds = 30 * 8 * 3600  # 2天
     # 基于上述一个月内的订单数据和仓库环境数据，实现仓库环境的仿真
     warehouse.total_time = total_seconds  # 仿真总时间
 

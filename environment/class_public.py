@@ -73,11 +73,8 @@ class Config:
             "ppo": {
                 # PPO算法参数
                 "gamma": 0.99,  # 折扣因子
-                "lambda_": 0.95,  # GAE参数
                 "clip_range": 0.2,  # 剪切范围
                 "learning_rate": 3e-4,  # 学习率
-                "n_steps": 2048,  # 每个批次的步数
-                "batch_size": 64,  # 批次大小
                 "n_epochs": 10,  # 每个批次的训练轮数
             }
         }
