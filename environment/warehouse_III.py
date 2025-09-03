@@ -12,6 +12,7 @@ import pickle
 from data.generat_order import GenerateData
 import gym
 from environment.class_public import Config
+import copy
 
 
 # 商品类
@@ -191,6 +192,7 @@ class WarehouseEnv(gym.Env, Config):
         self.parameter = self.parameters["warehouse"]  # 仓库参数
         # 仓库环境参数
         self.N_l = self.parameter["shelf_capacity"]  # 单个货架中储货位的数量
+        self.N_s = self.parameter["shelf_levels"]  # 货架层数
         self.N_a = self.parameter["area_num"]  # 仓库区域数量
         self.N_ai = self.parameter["aisle_num"]  # 仓库每个区域中巷道数量
         self.N_w = self.parameter["area_num"] * self.parameter["aisle_num"]  # 仓库巷道数量
@@ -267,39 +269,48 @@ class WarehouseEnv(gym.Env, Config):
                 # 计算拣货位的位置
                 position = (x, y)
 
-                # 创建该拣货位左侧储货位对象
-                bin_id_left = f"{nw}-{nl}-left"
-                storage_bin = StorageBin(bin_id_left, position, area_id, None, None)
-                self.storage_bins[bin_id_left] = storage_bin
-                # 创建该储货位存储的商品对象
-                item_id_left = f"{nw}-{nl}-left-item"
-                item = Item(item_id_left, bin_id_left, position, area_id, None)
-                self.items[item_id_left] = item
-                # 将商品放入储货位
-                storage_bin.item_id = item_id_left
-
-                # 创建该拣货位右侧储货位对象
-                bin_id_right = f"{nw}-{nl}-right"
-                storage_bin = StorageBin(bin_id_right, position, area_id, None, None)
-                self.storage_bins[bin_id_right] = storage_bin
-                # 创建该储货位存储的商品对象
-                item_id_right = f"{nw}-{nl}-right-item"
-                item = Item(item_id_right, bin_id_right, position, area_id, None)
-                self.items[item_id_right] = item
-                # 将商品放入储货位
-                storage_bin.item_id = item_id_right
-
                 # 创建拣货位对象
                 point_id = f"{nw}-{nl}"
-                pick_point = PickPoint(point_id, position, area_id, [item_id_left, item_id_right], [bin_id_left, bin_id_right])
+                pick_point = PickPoint(point_id, position, area_id, [], [])
                 self.pick_points[point_id] = pick_point  # 将拣货位加入到拣货位字典中
                 self.pick_points_area[area_id].append(pick_point)  # 将拣货位加入到对应区域的拣货位列表中
+                # 创建该拣货位对应的储货位和商品对象
+                for level in range(1, self.N_s + 1):
+                    # 创建该拣货位左侧储货位对象
+                    bin_id_left = f"{nw}-{nl}-{level}-left"
+                    storage_bin = StorageBin(bin_id_left, position, area_id, None, None)
+                    self.storage_bins[bin_id_left] = storage_bin
+                    # 创建该储货位存储的商品对象
+                    item_id_left = f"{nw}-{nl}-{level}-left-item"
+                    item = Item(item_id_left, bin_id_left, position, area_id, None)
+                    self.items[item_id_left] = item
+                    # 将商品放入储货位
+                    storage_bin.item_id = item_id_left
+                    # 将商品加入拣货位的商品列表
+                    pick_point.item_ids.append(item_id_left)
+                    # 将储货位ID加入拣货位的储货位列表
+                    pick_point.storage_bin_ids.append(bin_id_left)
 
-                # 将拣货位和储货位+商品关联
-                self.storage_bins[bin_id_left].pick_point_id = point_id
-                self.storage_bins[bin_id_right].pick_point_id = point_id
-                self.items[item_id_left].pick_point_id = point_id
-                self.items[item_id_right].pick_point_id = point_id
+                    # 创建该拣货位右侧储货位对象
+                    bin_id_right = f"{nw}-{nl}-{level}-right"
+                    storage_bin = StorageBin(bin_id_right, position, area_id, None, None)
+                    self.storage_bins[bin_id_right] = storage_bin
+                    # 创建该储货位存储的商品对象
+                    item_id_right = f"{nw}-{nl}-{level}-right-item"
+                    item = Item(item_id_right, bin_id_right, position, area_id, None)
+                    self.items[item_id_right] = item
+                    # 将商品放入储货位
+                    storage_bin.item_id = item_id_right
+                    # 将商品加入拣货位的商品列表
+                    pick_point.item_ids.append(item_id_right)
+                    # 将储货位ID加入拣货位的储货位列表
+                    pick_point.storage_bin_ids.append(bin_id_right)
+
+                    # 将拣货位和储货位+商品关联
+                    self.storage_bins[bin_id_left].pick_point_id = point_id
+                    self.storage_bins[bin_id_right].pick_point_id = point_id
+                    self.items[item_id_left].pick_point_id = point_id
+                    self.items[item_id_right].pick_point_id = point_id
 
     # 两个拣货位之间的最短路径长度（若不在一个巷道，则需要从上部或下部绕过储货位）
     def shortest_path_between_pick_points(self, point1, point2):
@@ -392,35 +403,48 @@ class WarehouseEnv(gym.Env, Config):
                         robot.remove = True  # 设置机器人移除标识
 
     def reset(self, orders):
-        """
-        重置仓库环境
-        """
-        # 重置仓库中的机器人对象信息
-        self.robots = []  # 机器人列表
-        self.robots_at_depot = []  # depot_position位置的机器人列表
-        self.robots_assigned = []  # 已分配订单的机器人列表
-        self.robots_added = []  # 已添加过的机器人列表
-        # 重置仓库中的拣货员对象信息
-        self.pickers = []  # 拣货员列表
-        self.pickers_added = []  # 已添加过的拣货员列表
-        self.pickers_area = {area_id: [] for area_id in self.area_ids}  # 每个区域的拣货员列表字典
-        # 重置仓库强化学习环境属性
-        self.state = None  # 当前状态
-        self.action = None  # 当前动作
-        self.next_state = None  # 下一个状态
-        self.reward = None  # 当前奖励
-        self.done = False  # 是否结束标志
-        self.total_cost_current = 0 # 当前决策点总成本
-        self.total_cost_last = 0  # 上一决策点总成本
-        # 重置仓库仿真环境时钟
-        self.current_time = 0  # 当前时间
-        # 重置仓库中的订单对象信息
-        self.orders = orders  # 整个仿真过程所有订单对象列表
-        self.orders_not_arrived = orders  # 未到达的订单对象列表
-        self.orders_unassigned = []  # 已到达未分配机器人的订单对象列表
-        self.orders_uncompleted = []  # 已到达未拣选完成的订单对象列表
-        self.orders_completed = []  # 已完成订单列表
-        self.orders_arrived = []  # 已到达订单列表
+        """完全重置仓库环境到初始状态"""
+        # ================== 1. 重置基础结构 ==================
+        # 重新生成仓库图结构
+        self.pick_points = {}  # 重置拣货位字典
+        self.storage_bins = {}  # 重置储货位字典
+        self.items = {}  # 重置商品字典
+        self.pick_points_area = {area_id: [] for area_id in self.area_ids}
+        self.create_warehouse_graph()  # 重建仓库结构
+
+        # ================== 2. 重置动态对象 ==================
+        # 机器人系统
+        self.robots = []
+        self.robots_at_depot = []
+        self.robots_assigned = []
+        self.robots_added = []  # 清空历史记录
+
+        # 拣货员系统
+        self.pickers = []
+        self.pickers_added = []
+        self.pickers_area = {area_id: [] for area_id in self.area_ids}
+
+        # ================== 3. 订单系统重置 ==================
+        # 深拷贝订单数据避免引用问题
+        self.orders = copy.deepcopy(orders)
+        self.orders_not_arrived = copy.deepcopy(orders)
+        self.orders_unassigned = []
+        self.orders_uncompleted = []
+        self.orders_completed = []
+        self.orders_arrived = []
+
+        # ================== 4. 时间系统重置 ==================
+        self.current_time = 0
+        self.total_cost_current = 0
+        self.total_cost_last = 0
+
+        # ================== 5. 状态机重置 ==================
+        self.done = False
+        self.state = None
+        self.action = None
+        self.next_state = None
+        self.reward = None
+
         # 提取初始状态
         self.state = self.state_extractor()
         return self.state
@@ -432,12 +456,12 @@ class WarehouseEnv(gym.Env, Config):
         离散点：新订单到达时刻、拣货员空闲时刻、机器人移动到拣货点时刻，机器人空闲时刻。
         action: 每天的开始时刻机器人和各区域内拣货员的调整值。
         """
-        self.action = action  # 动作
-        self.adjust_robots = action[0]  # 动作调整的机器人数量
+        self.action = np.round(action).astype(int) # 动作
+        self.adjust_robots = self.action[0]  # 动作调整的机器人数量
         # 如果当前机器人总数调整后小于或等于0，则设置调整数量为当前总数-1的负数
         if len(self.robots) + self.adjust_robots <= 0:
             self.adjust_robots = -len(self.robots) + 1
-        self.adjust_pickers_dict = {area_id: action[i] for i, area_id in enumerate(self.area_ids, start=1)}  # 动作调整的每个区域的拣货员数量
+        self.adjust_pickers_dict = {area_id: self.action[i] for i, area_id in enumerate(self.area_ids, start=1)}  # 动作调整的每个区域的拣货员数量
         # 如果当前区域拣货员数量调整后小于或等于0，则设置调整数量为当前区域拣货员数量-1的负数
         for area_id in self.area_ids:
             if len(self.pickers_area[area_id]) + self.adjust_pickers_dict[area_id] <= 0:
@@ -566,7 +590,7 @@ class WarehouseEnv(gym.Env, Config):
         """判断是否结束仿真"""
         if self.current_time >= self.total_time:
             self.done = True
-            print("仿真结束时刻", self.current_time)
+            # print("仿真结束时刻", self.current_time)
 
         # 提取当前状态，计算回报值
         self.state = self.state_extractor()  # 提取当前状态
@@ -735,15 +759,18 @@ class WarehouseEnv(gym.Env, Config):
 if __name__ == "__main__":
     # 初始化仓库环境
     warehouse = WarehouseEnv()
+    # 输出商品总数
+    print("Total number of items in the warehouse:", len(warehouse.items))
+
     # 一个月的总秒数
     total_seconds = 2 * 8 * 3600  # 7天
 
     # 订单到达泊松分布参数
     poisson_parameter = 30  # 泊松分布参数, 60秒一个订单到达
 
-    # # 生成一个月内的订单数据，并保存到orders.pkl文件中
-    # generate_orders = GenerateData(warehouse, total_seconds, poisson_parameter)  # 生成订单数据对象
-    # generate_orders.generate_orders()  # 生成一个月内的订单数据
+    # 生成一个月内的订单数据，并保存到orders.pkl文件中
+    generate_orders = GenerateData(warehouse, total_seconds, poisson_parameter)  # 生成订单数据对象
+    generate_orders.generate_orders()  # 生成一个月内的订单数据
 
     # 订单数据保存和读取位置
     file_order = 'D:\Python project\DRL_Warehouse\data'

@@ -68,7 +68,8 @@ if __name__ == "__main__":
     # 订单数据保存和读取位置
     file_order = 'D:\Python project\DRL_Warehouse\data'
     # 订单到达泊松分布参数
-    poisson_parameter = 30  # 泊松分布参数, n秒一个订单到达
+    poisson_parameter = 120  # 泊松分布参数, n秒一个订单到达
+
 
     # 生成一个月内的订单数据，并保存到orders.pkl文件中
     generate_orders = GenerateData(warehouse, total_seconds, poisson_parameter)  # 生成订单数据对象

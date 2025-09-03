@@ -15,10 +15,12 @@ class Config:
         """
         parameters = {
             "warehouse": {
-                # 单个货架中储货位数量
-                "shelf_capacity": 30,
+                # 单层货架中储货位数量
+                "shelf_capacity": 20,
+                # 货架层数
+                "shelf_levels": 3,
                 # 仓库区域数量
-                "area_num": 6,
+                "area_num": 3,
                 # 仓库每个区域中巷道数量
                 "aisle_num": 3,
                 # 储货位的长度
@@ -58,13 +60,13 @@ class Config:
                 # 订单打包时间 秒
                 "pack_time": 20,  # 秒
                 # 订单到达率范围 秒/个 相当于泊松分布参数
-                "poisson_parameter": (6, 30),  # 秒/个
+                "poisson_parameter": (60, 180),  # 秒/个
                 # 订单从到达到交期的可选时间长度列表 秒
                 "due_time_list": [1800, 3600, 7200],  # 秒
                 # 每次到达的订单数量范围 个
                 "order_n_arrival": (1, 10),  # 个
                 # 单个订单包含的商品数量范围 个
-                "order_n_items": (10, 20)  # 个
+                "order_n_items": (10, 30)  # 个
             },
             "item": {
                 # 商品拣选时间
@@ -76,6 +78,11 @@ class Config:
                 "clip_range": 0.2,  # 剪切范围
                 "learning_rate": 3e-4,  # 学习率
                 "n_epochs": 10,  # 每个批次的训练轮数
+                "normalize_rewards": True,  # 是否归一化回报
+                "standardize_rewards": True,  # 是否标准化回报
+                "initial_entropy_coeff": 0.2,  # 初始熵系数
+                "min_entropy_coeff": 0.01,  # 最小熵系数
+                "entropy_coeff_decay": 0.999  # 熵衰减率
             }
         }
 

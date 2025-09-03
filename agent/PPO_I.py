@@ -14,63 +14,118 @@ from data.generat_order import GenerateData
 from visdom import Visdom
 import csv
 from environment.class_public import Config
+import random
 
 # 设置训练数据可视化
 viz = Visdom(env='PPO_I')
-viz.line([4780647], [0], win='reward_I', opts=dict(title='Reward1', xlabel='Episode', ylabel='Reward'))
+viz.line([0], [0], win='reward_I', opts=dict(title='Reward1', xlabel='Episode', ylabel='Reward'))
 
 # 初始化仓库环境
 warehouse = WarehouseEnv()
 N_w = warehouse.N_w # 仓库巷道数量
 N_l = warehouse.N_l # 单个货架中储货位数量
+N_a = warehouse.N_a # 仓库区域数量
 
 # 定义策略网络
 class PolicyNetwork(nn.Module):
-    def __init__(self, input_channels=3, input_height=N_w, input_width=N_l, scalar_dim=7, hidden_dim=128, output_dim=7):
+    def __init__(self, input_channels=3, input_height=N_w, input_width=N_l,
+                 scalar_dim=N_a + 1, hidden_dim=128, output_dim=N_a + 1,
+                 out_feature_dim=3, fc_layers=10,
+                 attn_heads=4, attn_dim=128):
         super(PolicyNetwork, self).__init__()
         self.output_dim = output_dim
+        self.fc_layers = fc_layers
+        self.attn_heads = attn_heads
+        self.attn_dim = attn_dim
 
-        # CNN层
+        # CNN层（保持原结构）
         self.conv1 = nn.Conv2d(input_channels, 2, kernel_size=3, stride=1, padding=1)
         self.conv2 = nn.Conv2d(2, 1, kernel_size=3, stride=1, padding=1)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        # 计算全连接层输入尺寸
-        conv_output_size = (input_height // 2) * (input_width // 2) * 1  # 9 * 5 * 1 = 45
+        # 注意力机制相关参数
+        self.self_attn = nn.MultiheadAttention(
+            embed_dim=hidden_dim,
+            num_heads=attn_heads,
+            batch_first=True
+        )
+        self.attn_layer_norm = nn.LayerNorm(hidden_dim)
+        self.attn_fc = nn.Linear(hidden_dim, attn_dim)
 
-        # 层归一化
-        self.layer_norm = nn.LayerNorm(conv_output_size + scalar_dim)
+        # 动态构建全连接层（增加维度匹配）
+        conv_output_size = (input_height // 2) * (input_width // 2) * 1
+        self.fc0 = nn.Linear(conv_output_size, out_feature_dim)
 
-        # 全连接层
-        self.fc1 = nn.Linear(conv_output_size + scalar_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        # 调整输入维度以适应注意力
+        input_size = out_feature_dim + scalar_dim
 
-        # 输出层
+        self.fc_modules = nn.ModuleList()
+        self.layer_norm = nn.LayerNorm(input_size)
+
+        # 增强全连接层结构
+        for i in range(fc_layers):
+            in_features = input_size if i == 0 else hidden_dim
+            out_features = hidden_dim if i != fc_layers - 1 else attn_dim
+            self.fc_modules.append(nn.Linear(in_features, out_features))
+            if i < fc_layers - 1:
+                self.fc_modules.append(nn.ReLU())
+
+        # 注意力输出适配层
+        self.attn_adapter = nn.Sequential(
+            nn.Linear(attn_dim*2, hidden_dim),
+            nn.Tanh()
+        )
+
+        # 最终输出层
         self.action_mean = nn.Linear(hidden_dim, output_dim)
         self.action_log_std = nn.Parameter(torch.zeros(output_dim))
 
-        # 激活函数
-        self.activation = nn.ReLU()
-
     def forward(self, matrix_inputs, scalar_inputs):
-        x = self.activation(self.conv1(matrix_inputs))  # (batch_size, 16, 18, 10)
-        x = self.activation(self.conv2(x))             # (batch_size, 32, 18, 10)
-        x = self.pool(x)                                # (batch_size, 32, 10, 5)
-        x = x.view(x.size(0), -1)                      # (batch_size, 1600)
+        # 视觉特征提取
+        x = self.conv1(matrix_inputs)
+        x = torch.relu(x)
+        x = self.conv2(x)
+        x = torch.relu(x)
+        x = self.pool(x)
+        x = x.view(x.size(0), -1)
 
-        # 拼接标量输入
-        x = torch.cat((x, scalar_inputs), dim=1)       # (batch_size, 1607)
-        x = self.layer_norm(x)                          # (batch_size, 1607)
-        x = self.activation(self.fc1(x))               # (batch_size, hidden_dim)
-        x = self.activation(self.fc2(x))               # (batch_size, hidden_dim)
-        mean = self.action_mean(x)                      # (batch_size, 7)
-        std = torch.exp(self.action_log_std)            # (7,)
-        std = std.expand_as(mean)                        # (batch_size, 7)
+        # 基础特征处理
+        visual_features = torch.relu(self.fc0(x))
+        combined = torch.cat((visual_features, scalar_inputs), dim=1)
+        combined = self.layer_norm(combined)
+
+        # 动态全连接处理
+        for layer in self.fc_modules:
+            combined = layer(combined)
+
+        # 自注意力机制
+        batch_size = combined.size(0)
+        attn_input = combined.unsqueeze(1)  # [batch, 1, features]
+
+        # 计算注意力
+        attn_output, _ = self.self_attn(
+            query=attn_input,
+            key=attn_input,
+            value=attn_input
+        )
+        attn_output = attn_output.squeeze(1)
+        attn_output = self.attn_layer_norm(attn_output)
+
+        # 特征融合
+        fused_features = torch.cat([combined, attn_output], dim=1)
+        fused_features = self.attn_adapter(fused_features)
+
+        # 最终输出
+        mean = self.action_mean(fused_features)
+        std = torch.exp(self.action_log_std.expand_as(mean))
+
         return mean, std
 
 # 定义值网络
 class ValueNetwork(nn.Module):
-    def __init__(self, input_channels=3, input_height=N_w, input_width=N_l, scalar_dim=7, hidden_dim=128):
+    def __init__(self, input_channels=3, input_height=N_w, input_width=N_l,
+                 scalar_dim=N_a + 1, hidden_dim=128, out_feature_dim=3,
+                 num_fc_layers=10):  # 新增参数控制全连接层数量
         super(ValueNetwork, self).__init__()
 
         # CNN层
@@ -79,37 +134,57 @@ class ValueNetwork(nn.Module):
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
 
         # 计算全连接层输入尺寸
-        conv_output_size = (input_height // 2) * (input_width // 2) * 1  # 9 * 5 * 32 = 1600
+        conv_output_size = (input_height // 2) * (input_width // 2) * 1
+
+        # 初始全连接层
+        self.fc0 = nn.Linear(conv_output_size, out_feature_dim)
+
+        # 动态构建全连接层
+        self.fc_layers = nn.ModuleList()
+        input_size = out_feature_dim + scalar_dim
 
         # 层归一化
-        self.layer_norm = nn.LayerNorm(conv_output_size + scalar_dim)
+        self.layer_norm = nn.LayerNorm(input_size)
 
-        # 全连接层
-        self.fc1 = nn.Linear(conv_output_size + scalar_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        # 创建中间全连接层
+        for i in range(num_fc_layers - 1):  # 减去1是因为最后一层是value_head
+            self.fc_layers.append(nn.Linear(input_size, hidden_dim))
+            input_size = hidden_dim  # 后续层的输入尺寸等于hidden_dim
+
+        # 输出层
         self.value_head = nn.Linear(hidden_dim, 1)
 
         # 激活函数
         self.activation = nn.ReLU()
 
     def forward(self, matrix_inputs, scalar_inputs):
-        x = self.activation(self.conv1(matrix_inputs))  # (batch_size, 16, 18, 10)
-        x = self.activation(self.conv2(x))             # (batch_size, 32, 18, 10)
-        x = self.pool(x)                                # (batch_size, 32, 10, 5)
-        x = x.view(x.size(0), -1)                      # (batch_size, 1600)
+        # CNN部分
+        x = self.activation(self.conv1(matrix_inputs))
+        x = self.activation(self.conv2(x))
+        x = self.pool(x)
+        x = x.view(x.size(0), -1)
 
-        # 拼接标量输入
-        x = torch.cat((x, scalar_inputs), dim=1)       # (batch_size, 1607)
-        x = self.layer_norm(x)                          # (batch_size, 1607)
-        x = self.activation(self.fc1(x))               # (batch_size, hidden_dim)
-        x = self.activation(self.fc2(x))               # (batch_size, hidden_dim)
-        state_value = self.value_head(x)                # (batch_size, 1)
+        # 初始全连接层
+        x = self.activation(self.fc0(x))
+        x = torch.cat((x, scalar_inputs), dim=1)
+        x = self.layer_norm(x)
+
+        # 动态全连接层
+        for layer in self.fc_layers:
+            x = self.activation(layer(x))
+
+        # 输出层
+        state_value = self.value_head(x)
         return state_value
 
 # 定义PPO代理
 class PPOAgent(Config):
     def __init__(self, policy_network, value_network):
         super().__init__()  # 调用父类的构造函数
+        # 添加动态熵系数控制
+        self.ent_coef = self.parameters['ppo']['initial_entropy_coeff']  # 初始熵系数
+        self.ent_coef_decay = self.parameters['ppo']['entropy_coeff_decay']  # 熵衰减率
+        self.min_ent_coef = self.parameters['ppo']['min_entropy_coeff']  # 最小熵系数
         self.policy = policy_network
         self.policy_old = copy.deepcopy(policy_network)
         self.policy_old.eval()
@@ -145,14 +220,8 @@ class PPOAgent(Config):
             action = dist.sample()
             log_prob = dist.log_prob(action).sum(dim=1)
 
-            action = action.cpu().numpy()[0]       # (7,)
+            action = action.cpu().numpy()[0]      # (7,)
             log_prob = log_prob.cpu().numpy()[0]
-
-            # 动作范围限制
-            action = np.clip(action, -500, 500)
-
-            # 如果动作需要为整数，进行四舍五入
-            action = np.round(action).astype(int)
 
             # 存储记忆
             self.memory.append({
@@ -171,6 +240,35 @@ class PPOAgent(Config):
         self.memory[idx]['reward'] = reward
         self.memory[idx]['done'] = done
         self.memory[idx]['next_state'] = next_state
+
+    def compute_gae(self, rewards, values, next_values, dones):
+        """
+        计算广义优势估计 (Generalized Advantage Estimation)
+        Args:
+            rewards: 奖励序列 [T]
+            values: 状态值估计 [T]
+            next_values: 下一个状态值估计 [T]
+            dones: 终止标志 [T]
+            gamma: 折扣因子
+            lam: GAE参数
+        Returns:
+            advantages: 广义优势估计 [T]
+            returns: 目标回报 [T]
+        """
+        gamma = self.gamma
+        lam = 0.95
+        advantages = []
+        last_advantage = 0
+        # 反向遍历时间步
+        for t in reversed(range(len(rewards))):
+            delta = rewards[t] + gamma * next_values[t] * (1 - dones[t]) - values[t]
+            last_advantage = delta + gamma * lam * (1 - dones[t]) * last_advantage
+            advantages.insert(0, last_advantage)
+        advantages = torch.tensor(advantages, device=self.device)
+
+        # 计算目标回报
+        targets = advantages + values
+        return advantages, targets
 
     def update(self):
         """使用PPO算法更新策略和值网络"""
@@ -212,7 +310,8 @@ class PPOAgent(Config):
 
         # 计算值和优势
         with torch.no_grad():
-            values = self.value_network(matrix_inputs, scalar_inputs).squeeze(1)  # (batch,)
+            # 获取所有状态的值估计
+            values = self.value_network(matrix_inputs, scalar_inputs).squeeze(1)
 
             next_matrix_inputs = torch.FloatTensor(np.array([
                 [
@@ -225,14 +324,26 @@ class PPOAgent(Config):
             next_scalar_inputs = torch.FloatTensor(np.array([
                 [state['n_robots']] + state['n_pickers_area']
                 for state in next_states
-            ])).to(self.device)  # (batch, 7)
+            ])).to(self.device)
+            next_values = self.value_network(next_matrix_inputs, next_scalar_inputs).squeeze(1)
 
-            next_values = self.value_network(next_matrix_inputs, next_scalar_inputs).squeeze(1)  # (batch,)
-
+            # 转换为张量
             rewards_tensor = torch.FloatTensor(rewards).to(self.device)
             dones_tensor = torch.FloatTensor(dones).to(self.device)
-            targets = rewards_tensor + self.gamma * next_values * (1 - dones_tensor)
-            advantages = targets - values
+
+            # 使用GAE计算优势
+            advantages, targets = self.compute_gae(
+                rewards=rewards_tensor,
+                values=values,
+                next_values=next_values,
+                dones=dones_tensor # 可配置参数
+            )
+            # 归一化优势
+            if self.parameters["ppo"]["normalize_rewards"]:
+                advantages = (advantages - advantages.min()) / (advantages.max() - advantages.min() + 1e-8)  # 防止除零错误
+            # 标准化优势
+            if self.parameters["ppo"]["standardize_rewards"]:
+                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
         # PPO更新
         for _ in range(self.K_epochs):
@@ -240,6 +351,8 @@ class PPOAgent(Config):
             dist = Normal(mean, std)
             logprobs_new = dist.log_prob(actions).sum(dim=1)
             ratios = torch.exp(logprobs_new - old_logprobs)
+            # 计算熵
+            entropy = dist.entropy().mean()
 
             # 计算损失
             surr1 = ratios * advantages
@@ -247,6 +360,10 @@ class PPOAgent(Config):
             policy_loss = -torch.min(surr1, surr2).mean()
             value = self.value_network(matrix_inputs, scalar_inputs).squeeze(1)
             value_loss = nn.MSELoss()(value, targets)
+            # 计算熵损失
+            entropy_loss = -self.ent_coef * entropy
+            # 总损失
+            # total_loss = policy_loss + 0.5 * value_loss + entropy_loss
 
             # 反向传播与优化
             self.policy_optimizer.zero_grad()
@@ -256,6 +373,9 @@ class PPOAgent(Config):
             self.policy_optimizer.step()
             self.value_optimizer.step()
 
+        # 在更新后衰减熵系数
+        self.ent_coef = max(self.ent_coef * self.ent_coef_decay, self.min_ent_coef)
+
         # 更新旧的策略网络
         self.policy_old.load_state_dict(self.policy.state_dict())
 
@@ -263,31 +383,49 @@ class PPOAgent(Config):
         self.memory = []
 
 # 定义训练函数
-def train_ppo_agent(ppo_agent, warehouse_env, num_episodes=1000):
+def train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=1000):
+    total_cost = float('inf')  # 初始化总成本
+    train_env = copy.deepcopy(warehouse)  # 训练环境
+    test_env = copy.deepcopy(warehouse)  # 测试环境
     for episode in range(num_episodes):
-        orders_object = copy.deepcopy(orders)  # 深拷贝订单数据
-        state = warehouse_env.reset(orders_object) # 重置环境并获取初始状态
+        # ====================训练=============================
+        total_seconds = 31 * 8 * 3600  # 31天
+        generate_orders = GenerateData(warehouse, total_seconds)  # 生成订单数据对象
+        orders = generate_orders.generate_orders()  # 生成一个月内的订单数据
+        state = train_env.reset(orders)  # 重置环境并获取初始状态
         done = False
         total_reward = 0
-
         while not done:
             action, log_prob = ppo_agent.select_action(state)
-            next_state, reward, done = warehouse_env.step(action)
+            next_state, reward, done = train_env.step(action)
             ppo_agent.store_reward_and_next_state(len(ppo_agent.memory) - 1, reward, done, next_state)
             state = next_state
             total_reward += reward
-            print(done)
-
+        # 更新网络
         ppo_agent.update()
+
+        # ===================测试==============================
+        with torch.no_grad():
+            state = test_env.reset(orders_test) # 重置环境并获取初始状态
+            done = False
+            total_reward = 0
+            while not done:
+                action, log_prob = ppo_agent.select_action(state)
+                next_state, reward, done = test_env.step(action)
+                ppo_agent.store_reward_and_next_state(len(ppo_agent.memory) - 1, reward, done, next_state)
+                state = next_state
+                total_reward += reward
+
         print(f"Episode {episode + 1}/{num_episodes}, Total Reward: {total_reward}")
 
         # 可视化训练数据
         viz.line([-total_reward], [episode + 1], win='reward_I', update='append')
 
         # 保存模型
-        if (episode + 1) % 500 == 0:
-            torch.save(ppo_agent.policy.state_dict(), f"policy_network_PPO_I_{episode + 1}.pth")
-            torch.save(ppo_agent.value_network.state_dict(), f"value_network_PPO_I_{episode + 1}.pth")
+        if total_cost >= -total_reward:
+            torch.save(ppo_agent.policy.state_dict(), f"policy_network_PPO_I.pth")
+            torch.save(ppo_agent.value_network.state_dict(), f"value_network_PPO_I.pth")
+            total_cost = - total_reward
 
         # 保存训练数据
         with open('training_data_PPO_I.csv', 'a', newline='') as f:
@@ -298,25 +436,20 @@ def train_ppo_agent(ppo_agent, warehouse_env, num_episodes=1000):
 if __name__ == "__main__":
     # 订单数据保存和读取位置
     file_order = 'D:\Python project\DRL_Warehouse\data'
-    poisson_parameter = 30  # 泊松分布参数, 60秒一个订单到达
-
-    # # 生成一个月内的订单数据，并保存到orders.pkl文件中
-    # generate_orders = GenerateData(warehouse, total_seconds, poisson_parameter)  # 生成订单数据对象
-    # generate_orders.generate_orders()  # 生成一个月内的订单数据
-
+    poisson_parameter = 120  # 测试算例泊松分布参数
     # 读取一个月内的订单数据，orders.pkl文件中
     with open(file_order + "\orders_{}.pkl".format(poisson_parameter), "rb") as f:
-        orders = pickle.load(f)  # 读取订单数据
+        orders_test = pickle.load(f)  # 读取订单数据
 
     # 一个月的总秒数
-    total_seconds = 30 * 8 * 3600  # 6天
+    total_seconds = 30 * 8 * 3600  # 30天
     # 基于上述一个月内的订单数据和仓库环境数据，实现仓库环境的仿真
     warehouse.total_time = total_seconds  # 仿真总时间
 
     # 初始化网络
-    policy_network = PolicyNetwork(output_dim=7)
+    policy_network = PolicyNetwork()
     value_network = ValueNetwork()
     # 初始化PPO代理
     ppo_agent = PPOAgent(policy_network, value_network)
     # 训练PPO代理
-    train_ppo_agent(ppo_agent, warehouse, num_episodes=1000)
+    train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=3000)

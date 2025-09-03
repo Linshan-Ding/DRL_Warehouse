@@ -372,35 +372,48 @@ class WarehouseEnv(gym.Env, Config):
                         robot.remove = True  # 设置机器人移除标识
 
     def reset(self, orders):
-        """
-        重置仓库环境
-        """
-        # 重置仓库中的机器人对象信息
-        self.robots = []  # 机器人列表
-        self.robots_at_depot = []  # depot_position位置的机器人列表
-        self.robots_assigned = []  # 已分配订单的机器人列表
-        self.robots_added = []  # 已添加过的机器人列表
-        # 重置仓库中的拣货员对象信息
-        self.pickers = []  # 拣货员列表
-        self.pickers_added = []  # 已添加过的拣货员列表
-        self.pickers_area = {area_id: [] for area_id in self.area_ids}  # 每个区域的拣货员列表字典
-        # 重置仓库强化学习环境属性
-        self.state = None  # 当前状态
-        self.action = None  # 当前动作
-        self.next_state = None  # 下一个状态
-        self.reward = None  # 当前奖励
-        self.done = False  # 是否结束标志
-        self.total_cost_current = 0 # 当前决策点总成本
-        self.total_cost_last = 0  # 上一决策点总成本
-        # 重置仓库仿真环境时钟
-        self.current_time = 0  # 当前时间
-        # 重置仓库中的订单对象信息
-        self.orders = orders  # 整个仿真过程所有订单对象列表
-        self.orders_not_arrived = orders  # 未到达的订单对象列表
-        self.orders_unassigned = []  # 已到达未分配机器人的订单对象列表
-        self.orders_uncompleted = []  # 已到达未拣选完成的订单对象列表
-        self.orders_completed = []  # 已完成订单列表
-        self.orders_arrived = []  # 已到达订单列表
+        """完全重置仓库环境到初始状态"""
+        # ================== 1. 重置基础结构 ==================
+        # 重新生成仓库图结构
+        self.pick_points = {}  # 重置拣货位字典
+        self.storage_bins = {}  # 重置储货位字典
+        self.items = {}  # 重置商品字典
+        self.pick_points_area = {area_id: [] for area_id in self.area_ids}
+        self.create_warehouse_graph()  # 重建仓库结构
+
+        # ================== 2. 重置动态对象 ==================
+        # 机器人系统
+        self.robots = []
+        self.robots_at_depot = []
+        self.robots_assigned = []
+        self.robots_added = []  # 清空历史记录
+
+        # 拣货员系统
+        self.pickers = []
+        self.pickers_added = []
+        self.pickers_area = {area_id: [] for area_id in self.area_ids}
+
+        # ================== 3. 订单系统重置 ==================
+        # 深拷贝订单数据避免引用问题
+        self.orders = copy.deepcopy(orders)
+        self.orders_not_arrived = copy.deepcopy(orders)
+        self.orders_unassigned = []
+        self.orders_uncompleted = []
+        self.orders_completed = []
+        self.orders_arrived = []
+
+        # ================== 4. 时间系统重置 ==================
+        self.current_time = 0
+        self.total_cost_current = 0
+        self.total_cost_last = 0
+
+        # ================== 5. 状态机重置 ==================
+        self.done = False
+        self.state = None
+        self.action = None
+        self.next_state = None
+        self.reward = None
+
         # 提取初始状态
         self.state = self.state_extractor()
         return self.state

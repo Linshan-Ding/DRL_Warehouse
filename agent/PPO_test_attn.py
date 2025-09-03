@@ -1,12 +1,12 @@
 """
 PPO agent：Proximal Policy Optimization
-调整每个决策点机器人和拣货员的数量：拣货员+长租
+调整每个决策点机器人和拣货员的数量：拣货员+日租
 """
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.distributions import Normal
-from environment.warehouse_II import WarehouseEnv  # 导入仓库环境类
+from environment.warehouse_I import WarehouseEnv  # 导入仓库环境类
 import numpy as np
 import copy
 import pickle # 用于读取订单数据
@@ -14,22 +14,23 @@ from data.generat_order import GenerateData
 from visdom import Visdom
 import csv
 from environment.class_public import Config
+import random
 
 # 设置训练数据可视化
-viz = Visdom(env='PPO_II')
-viz.line([0], [0], win='reward_II', opts=dict(title='Reward2', xlabel='Episode', ylabel='Reward'))
+viz = Visdom(env='PPO_I_attn')
+viz.line([0], [0], win='reward_I_attn', opts=dict(title='Reward1_attn', xlabel='Episode', ylabel='Reward'))
 
-# -----------------初始化仓库环境---------------------
+# 初始化仓库环境
 warehouse = WarehouseEnv()
-N_w = warehouse.N_w  # 仓库宽度
-N_l = warehouse.N_l  # 仓库长度
+N_w = warehouse.N_w # 仓库巷道数量
+N_l = warehouse.N_l # 单个货架中储货位数量
 N_a = warehouse.N_a # 仓库区域数量
 
 # 定义策略网络
 class PolicyNetwork(nn.Module):
-    def __init__(self, input_channels=3, input_height=N_w, input_width=N_l,
+    def __init__(self, input_channels=1, input_height=N_w, input_width=N_l,
                  scalar_dim=N_a + 1, hidden_dim=128, output_dim=N_a + 1,
-                 out_feature_dim=3, fc_layers=10,
+                 out_feature_dim=1, fc_layers=10,
                  attn_heads=4, attn_dim=128):
         super(PolicyNetwork, self).__init__()
         self.output_dim = output_dim
@@ -120,11 +121,10 @@ class PolicyNetwork(nn.Module):
 
         return mean, std
 
-
 # 定义值网络
 class ValueNetwork(nn.Module):
-    def __init__(self, input_channels=3, input_height=N_w, input_width=N_l,
-                 scalar_dim=N_a + 1, hidden_dim=128, out_feature_dim=3,
+    def __init__(self, input_channels=1, input_height=N_w, input_width=N_l,
+                 scalar_dim=N_a + 1, hidden_dim=128, out_feature_dim=1,
                  num_fc_layers=10):  # 新增参数控制全连接层数量
         super(ValueNetwork, self).__init__()
 
@@ -177,11 +177,14 @@ class ValueNetwork(nn.Module):
         state_value = self.value_head(x)
         return state_value
 
-
 # 定义PPO代理
 class PPOAgent(Config):
     def __init__(self, policy_network, value_network):
         super().__init__()  # 调用父类的构造函数
+        # 添加动态熵系数控制
+        self.ent_coef = self.parameters['ppo']['initial_entropy_coeff']  # 初始熵系数
+        self.ent_coef_decay = self.parameters['ppo']['entropy_coeff_decay']  # 熵衰减率
+        self.min_ent_coef = self.parameters['ppo']['min_entropy_coeff']  # 最小熵系数
         self.policy = policy_network
         self.policy_old = copy.deepcopy(policy_network)
         self.policy_old.eval()
@@ -205,8 +208,6 @@ class PPOAgent(Config):
         with torch.no_grad():
             # 提取矩阵和标量输入
             matrix_inputs = torch.FloatTensor(np.array([
-                state['robot_queue_list'],
-                state['picker_list'],
                 state['unpicked_items_list']
             ])).unsqueeze(0).to(self.device)  # (1, 3, 21, 10)
 
@@ -217,8 +218,11 @@ class PPOAgent(Config):
             action = dist.sample()
             log_prob = dist.log_prob(action).sum(dim=1)
 
-            action = action.cpu().numpy()[0]       # (7,)
+            action = action.cpu().numpy()[0]      # (7,)
             log_prob = log_prob.cpu().numpy()[0]
+
+            # 动作范围限制
+            print('action:', action)
 
             # 存储记忆
             self.memory.append({
@@ -238,34 +242,20 @@ class PPOAgent(Config):
         self.memory[idx]['done'] = done
         self.memory[idx]['next_state'] = next_state
 
-    def compute_gae(self, rewards, values, next_values, dones):
-        """
-        计算广义优势估计 (Generalized Advantage Estimation)
-        Args:
-            rewards: 奖励序列 [T]
-            values: 状态值估计 [T]
-            next_values: 下一个状态值估计 [T]
-            dones: 终止标志 [T]
-            gamma: 折扣因子
-            lam: GAE参数
-        Returns:
-            advantages: 广义优势估计 [T]
-            returns: 目标回报 [T]
-        """
-        gamma = self.gamma
-        lam = 0.95
+    def compute_advantages(self, rewards, values, dones):
         advantages = []
         last_advantage = 0
-        # 反向遍历时间步
-        for t in reversed(range(len(rewards))):
-            delta = rewards[t] + gamma * next_values[t] * (1 - dones[t]) - values[t]
-            last_advantage = delta + gamma * lam * (1 - dones[t]) * last_advantage
-            advantages.insert(0, last_advantage)
-        advantages = torch.tensor(advantages, device=self.device)
+        gamma = self.gamma
+        lambda_ = 0.95  # GAE参数
 
-        # 计算目标回报
-        targets = advantages + values
-        return advantages, targets
+        # 逆序计算
+        for t in reversed(range(len(rewards))):
+            delta = rewards[t] + gamma * values[t + 1] * (1 - dones[t]) - values[t]
+            advantages.append(delta + gamma * lambda_ * last_advantage * (1 - dones[t]))
+            last_advantage = advantages[-1]
+
+        advantages = list(reversed(advantages))
+        return torch.tensor(advantages)
 
     def update(self):
         """使用PPO算法更新策略和值网络"""
@@ -291,8 +281,6 @@ class PPOAgent(Config):
         # 转换为张量
         matrix_inputs = torch.FloatTensor(np.array([
             [
-                state['robot_queue_list'],
-                state['picker_list'],
                 state['unpicked_items_list']
             ] for state in states
         ])).to(self.device)  # (batch, 3, 21, 10)
@@ -308,61 +296,55 @@ class PPOAgent(Config):
         # 计算值和优势
         with torch.no_grad():
             values = self.value_network(matrix_inputs, scalar_inputs).squeeze(1)  # (batch,)
-            next_matrix_inputs = torch.FloatTensor(np.array([
-                [
-                    state['robot_queue_list'],
-                    state['picker_list'],
-                    state['unpicked_items_list']
-                ] for state in next_states
-            ])).to(self.device)
-            next_scalar_inputs = torch.FloatTensor(np.array([
-                [state['n_robots']] + state['n_pickers_area']
-                for state in next_states
-            ])).to(self.device)
-
-            next_values = self.value_network(next_matrix_inputs, next_scalar_inputs).squeeze(1)  # (batch,)
-
-            # 转换为张量
-            rewards_tensor = torch.FloatTensor(rewards).to(self.device)
-            dones_tensor = torch.FloatTensor(dones).to(self.device)
-
-            # 使用GAE计算优势
-            advantages, targets = self.compute_gae(
-                rewards=rewards_tensor,
-                values=values,
-                next_values=next_values,
-                dones=dones_tensor  # 可配置参数
-            )
-
-            # # 归一化优势
-            # if self.parameters["ppo"]["normalize_rewards"]:
-            #     advantages = (advantages - advantages.min()) / (advantages.max() - advantages.min() + 1e-8)  # 防止除零错误
-            # # 标准化优势
-            # if self.parameters["ppo"]["standardize_rewards"]:
-            #     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+            # 基于reward计算累计折扣回报作为targets
+            discounted_returns = [0]   # 初始化折扣回报列表
+            # 计算折扣回报
+            for ix in range(len(states)):
+                return_value = rewards[-(ix + 1)] + self.gamma * discounted_returns[-1]
+                discounted_returns.append(return_value)
+            discounted_returns = discounted_returns[1:]  # 去掉第一个元素
+            discounted_returns = discounted_returns[::-1]  # 反转列表
+            discounted_returns = torch.tensor(discounted_returns).to(self.device).detach()  # (batch,)
+            # 回报归一化
+            if self.parameters["ppo"]["normalize_rewards"]:
+                discounted_returns = (discounted_returns - discounted_returns.min()) / (discounted_returns.max() - discounted_returns.min() + 1e-8)  # 防止除零错误
+            # 回报标准化
+            if self.parameters["ppo"]["standardize_rewards"]:
+                discounted_returns = (discounted_returns - discounted_returns.mean()) / (discounted_returns.std() + 1e-8)  # 防止除零错误
+            # discounted_returns数据类型转为torch.float32
+            discounted_returns = discounted_returns.float().to(self.device)  # (batch,)
+            # 计算优势
+            advantages = discounted_returns - values  # (batch,)
 
         # PPO更新
         for _ in range(self.K_epochs):
             mean, std = self.policy(matrix_inputs, scalar_inputs)
             dist = Normal(mean, std)
             logprobs_new = dist.log_prob(actions).sum(dim=1)
-
             ratios = torch.exp(logprobs_new - old_logprobs)
+            # 计算熵
+            entropy = dist.entropy().mean()
 
+            # 计算损失
             surr1 = ratios * advantages
             surr2 = torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
             policy_loss = -torch.min(surr1, surr2).mean()
-
             value = self.value_network(matrix_inputs, scalar_inputs).squeeze(1)
-            value_loss = nn.MSELoss()(value, targets)
+            value_loss = nn.MSELoss()(value, discounted_returns)
+            # 计算熵损失
+            entropy_loss = -self.ent_coef * entropy
+            # 总损失
+            total_loss = policy_loss + 0.5 * value_loss + entropy_loss
 
             # 反向传播与优化
             self.policy_optimizer.zero_grad()
             self.value_optimizer.zero_grad()
-            policy_loss.backward()
-            value_loss.backward()
+            total_loss.backward()
             self.policy_optimizer.step()
             self.value_optimizer.step()
+
+        # 在更新后衰减熵系数
+        self.ent_coef = max(self.ent_coef * self.ent_coef_decay, self.min_ent_coef)
 
         # 更新旧的策略网络
         self.policy_old.load_state_dict(self.policy.state_dict())
@@ -370,54 +352,36 @@ class PPOAgent(Config):
         # 清空记忆
         self.memory = []
 
-
 # 定义训练函数
-def train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=1000):
-    total_cost = float('inf')  # 初始化总成本
-    train_env = copy.deepcopy(warehouse)  # 训练环境
-    test_env = copy.deepcopy(warehouse)  # 测试环境
+def train_ppo_agent(ppo_agent, warehouse_env, num_episodes=1000):
     for episode in range(num_episodes):
-        # ====================训练=============================
-        total_seconds = 31 * 8 * 3600  # 31天
-        generate_orders = GenerateData(warehouse, total_seconds)  # 生成订单数据对象
-        orders = generate_orders.generate_orders()  # 生成一个月内的订单数据
-        state = train_env.reset(orders)  # 重置环境并获取初始状态
+        state = warehouse_env.reset(orders) # 重置环境并获取初始状态
         done = False
         total_reward = 0
+
         while not done:
             action, log_prob = ppo_agent.select_action(state)
-            next_state, reward, done = train_env.step(action)
+            next_state, reward, done = warehouse_env.step(action)
             ppo_agent.store_reward_and_next_state(len(ppo_agent.memory) - 1, reward, done, next_state)
             state = next_state
             total_reward += reward
-        # 更新网络
+            # print(done)
+            print(state['n_robots'], state['n_pickers_area'])
+            print('完成的订单数量：', len(warehouse.orders_completed))
+
         ppo_agent.update()
-
-        # ===================测试==============================
-        with torch.no_grad():
-            state = test_env.reset(orders_test) # 重置环境并获取初始状态
-            done = False
-            total_reward = 0
-            while not done:
-                action, log_prob = ppo_agent.select_action(state)
-                next_state, reward, done = test_env.step(action)
-                ppo_agent.store_reward_and_next_state(len(ppo_agent.memory) - 1, reward, done, next_state)
-                state = next_state
-                total_reward += reward
-
         print(f"Episode {episode + 1}/{num_episodes}, Total Reward: {total_reward}")
 
         # 可视化训练数据
-        viz.line([-total_reward], [episode + 1], win='reward_II', update='append')
+        viz.line([-total_reward], [episode + 1], win='reward_I_attn', update='append')
 
         # 保存模型
-        if total_cost >= -total_reward:
-            torch.save(ppo_agent.policy.state_dict(), f"policy_network_PPO_II.pth")
-            torch.save(ppo_agent.value_network.state_dict(), f"value_network_PPO_II.pth")
-            total_cost = - total_reward
+        if (episode + 1) % 500 == 0:
+            torch.save(ppo_agent.policy.state_dict(), f"policy_network_PPO_I_{episode + 1}.pth")
+            torch.save(ppo_agent.value_network.state_dict(), f"value_network_PPO_I_{episode + 1}.pth")
 
         # 保存训练数据
-        with open('training_data_PPO_II.csv', 'a', newline='') as f:
+        with open('training_data_PPO_I.csv', 'a', newline='') as f:
             writer = csv.writer(f)
             writer.writerow([episode + 1, total_reward])
 
@@ -425,15 +389,19 @@ def train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=1000):
 if __name__ == "__main__":
     # 订单数据保存和读取位置
     file_order = 'D:\Python project\DRL_Warehouse\data'
-    poisson_parameter = 120  # 测试算例泊松分布参数
-    # 读取一个月内的订单数据，orders.pkl文件中
-    with open(file_order + "\orders_{}.pkl".format(poisson_parameter), "rb") as f:
-        orders_test = pickle.load(f)  # 读取订单数据
-
+    poisson_parameter = 60  # 泊松分布参数, 60秒一个订单到达
     # 一个月的总秒数
-    total_seconds = 30 * 8 * 3600  # 30天
+    total_seconds = 3 * 8 * 3600  # 6天
     # 基于上述一个月内的订单数据和仓库环境数据，实现仓库环境的仿真
     warehouse.total_time = total_seconds  # 仿真总时间
+
+    # # 生成一个月内的订单数据，并保存到orders.pkl文件中
+    # generate_orders = GenerateData(warehouse, total_seconds, poisson_parameter)  # 生成订单数据对象
+    # orders = generate_orders.generate_orders()  # 生成一个月内的订单数据
+
+    # 读取一个月内的订单数据，orders.pkl文件中
+    with open(file_order + "\orders_{}.pkl".format(poisson_parameter), "rb") as f:
+        orders = pickle.load(f)  # 读取订单数据
 
     # 初始化网络
     policy_network = PolicyNetwork()
@@ -441,4 +409,4 @@ if __name__ == "__main__":
     # 初始化PPO代理
     ppo_agent = PPOAgent(policy_network, value_network)
     # 训练PPO代理
-    train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=3000)
+    train_ppo_agent(ppo_agent, warehouse, num_episodes=1000)
