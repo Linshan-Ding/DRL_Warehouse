@@ -186,6 +186,7 @@ class WarehouseEnv(gym.Env, Config):
         self.parameter = self.parameters["warehouse"]  # 仓库参数
         # 仓库环境参数
         self.N_l = self.parameter["shelf_capacity"]  # 单个货架中储货位的数量
+        self.N_s = self.parameter["shelf_levels"]  # 货架层数
         self.N_a = self.parameter["area_num"]  # 仓库区域数量
         self.N_ai = self.parameter["aisle_num"]  # 仓库每个区域中巷道数量
         self.N_w = self.parameter["area_num"] * self.parameter["aisle_num"]  # 仓库巷道数量
@@ -262,39 +263,48 @@ class WarehouseEnv(gym.Env, Config):
                 # 计算拣货位的位置
                 position = (x, y)
 
-                # 创建该拣货位左侧储货位对象
-                bin_id_left = f"{nw}-{nl}-left"
-                storage_bin = StorageBin(bin_id_left, position, area_id, None, None)
-                self.storage_bins[bin_id_left] = storage_bin
-                # 创建该储货位存储的商品对象
-                item_id_left = f"{nw}-{nl}-left-item"
-                item = Item(item_id_left, bin_id_left, position, area_id, None)
-                self.items[item_id_left] = item
-                # 将商品放入储货位
-                storage_bin.item_id = item_id_left
-
-                # 创建该拣货位右侧储货位对象
-                bin_id_right = f"{nw}-{nl}-right"
-                storage_bin = StorageBin(bin_id_right, position, area_id, None, None)
-                self.storage_bins[bin_id_right] = storage_bin
-                # 创建该储货位存储的商品对象
-                item_id_right = f"{nw}-{nl}-right-item"
-                item = Item(item_id_right, bin_id_right, position, area_id, None)
-                self.items[item_id_right] = item
-                # 将商品放入储货位
-                storage_bin.item_id = item_id_right
-
                 # 创建拣货位对象
                 point_id = f"{nw}-{nl}"
-                pick_point = PickPoint(point_id, position, area_id, [item_id_left, item_id_right], [bin_id_left, bin_id_right])
+                pick_point = PickPoint(point_id, position, area_id, [], [])
                 self.pick_points[point_id] = pick_point  # 将拣货位加入到拣货位字典中
                 self.pick_points_area[area_id].append(pick_point)  # 将拣货位加入到对应区域的拣货位列表中
+                # 创建该拣货位对应的储货位和商品对象
+                for level in range(1, self.N_s + 1):
+                    # 创建该拣货位左侧储货位对象
+                    bin_id_left = f"{nw}-{nl}-{level}-left"
+                    storage_bin = StorageBin(bin_id_left, position, area_id, None, None)
+                    self.storage_bins[bin_id_left] = storage_bin
+                    # 创建该储货位存储的商品对象
+                    item_id_left = f"{nw}-{nl}-{level}-left-item"
+                    item = Item(item_id_left, bin_id_left, position, area_id, None)
+                    self.items[item_id_left] = item
+                    # 将商品放入储货位
+                    storage_bin.item_id = item_id_left
+                    # 将商品加入拣货位的商品列表
+                    pick_point.item_ids.append(item_id_left)
+                    # 将储货位ID加入拣货位的储货位列表
+                    pick_point.storage_bin_ids.append(bin_id_left)
 
-                # 将拣货位和储货位+商品关联
-                self.storage_bins[bin_id_left].pick_point_id = point_id
-                self.storage_bins[bin_id_right].pick_point_id = point_id
-                self.items[item_id_left].pick_point_id = point_id
-                self.items[item_id_right].pick_point_id = point_id
+                    # 创建该拣货位右侧储货位对象
+                    bin_id_right = f"{nw}-{nl}-{level}-right"
+                    storage_bin = StorageBin(bin_id_right, position, area_id, None, None)
+                    self.storage_bins[bin_id_right] = storage_bin
+                    # 创建该储货位存储的商品对象
+                    item_id_right = f"{nw}-{nl}-{level}-right-item"
+                    item = Item(item_id_right, bin_id_right, position, area_id, None)
+                    self.items[item_id_right] = item
+                    # 将商品放入储货位
+                    storage_bin.item_id = item_id_right
+                    # 将商品加入拣货位的商品列表
+                    pick_point.item_ids.append(item_id_right)
+                    # 将储货位ID加入拣货位的储货位列表
+                    pick_point.storage_bin_ids.append(bin_id_right)
+
+                    # 将拣货位和储货位+商品关联
+                    self.storage_bins[bin_id_left].pick_point_id = point_id
+                    self.storage_bins[bin_id_right].pick_point_id = point_id
+                    self.items[item_id_left].pick_point_id = point_id
+                    self.items[item_id_right].pick_point_id = point_id
 
     # 两个拣货位之间的最短路径长度（若不在一个巷道，则需要从上部或下部绕过储货位）
     def shortest_path_between_pick_points(self, point1, point2):

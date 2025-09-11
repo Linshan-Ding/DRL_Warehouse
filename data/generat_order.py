@@ -1,12 +1,11 @@
 """
 生成仿真订单
 """
-from environment.class_public import Order
 import random
 import copy
 import pickle
 from data.warehouse import WarehouseEnv
-from environment.class_public import Config
+from environment.class_public import Config, Order
 
 # 生成数据类
 class GenerateData(Config):
@@ -62,6 +61,7 @@ class GenerateData(Config):
 if __name__ == "__main__":
     # 实例化仓库对象
     warehouse = WarehouseEnv()
+    print('仓库中的商品种类数:', len(warehouse.items))  # 仓库中的商品种类数
     # 一个月的总秒数
     total_seconds = 31 * 8 * 3600  # 31天
 
@@ -69,7 +69,6 @@ if __name__ == "__main__":
     file_order = 'D:\Python project\DRL_Warehouse\data'
     # 订单到达泊松分布参数
     poisson_parameter = 120  # 泊松分布参数, n秒一个订单到达
-
 
     # 生成一个月内的订单数据，并保存到orders.pkl文件中
     generate_orders = GenerateData(warehouse, total_seconds, poisson_parameter)  # 生成订单数据对象

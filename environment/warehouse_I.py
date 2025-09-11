@@ -550,17 +550,17 @@ class WarehouseEnv(gym.Env, Config):
                         shortest_path_length = self.shortest_path_between_pick_points(robot, next_pick_point)
                         move_time = shortest_path_length / robot.speed
                         robot.move_to_pick_point_time = self.current_time + move_time
-                    # 若机器人所有商品拣货完成，则更新机器人移动到depot_position的时间
+                    # 若机器人所有商品拣货完成，则更新机器人移动到depot_position并打包完成的时间
                     else:
                         # print("机器人拣货完成")
                         # 更新机器人移动到depot_position的时间
                         shortest_path_length = self.shortest_path_between_pick_points(robot, self.depot_object)
                         move_time = shortest_path_length / robot.speed
-                        robot.move_to_depot_time = self.current_time + move_time + self.pack_time  # 机器人移动到depot_position的时间
+                        robot.move_to_depot_time = self.current_time + move_time + self.pack_time  # 机器人移动到depot_position并打包完成的时间
 
-            # 5、若当前时间等于机器人移动到depot_position时刻，则更新机器人的状态，重置机器人的订单对象
+            # 5、若当前时间等于机器人移动到depot_position并打包完成的时刻，则更新机器人的状态，重置机器人的订单对象
             for robot in self.robots:
-                # 若机器人移动到depot_position时刻
+                # 若机器人移动到depot_position并打包完成的时刻
                 if self.current_time == robot.move_to_depot_time:
                     robot.state = 'idle'  # 更新机器人的状态
                     self.orders_uncompleted.remove(robot.order)  # 从未拣选完成的订单列表中移除该订单
@@ -735,7 +735,7 @@ class WarehouseEnv(gym.Env, Config):
 if __name__ == "__main__":
     # 基于仓库中的商品创建一个月内的订单对象，每个订单包含多个商品，订单到达时间服从泊松分布，仿真周期设置为一个月
     # 一个月的总秒数
-    total_seconds = 3 * 8 * 3600  # 7天
+    total_seconds = 3 * 8 * 3600  # 3天
     # 订单到达泊松分布参数
     poisson_parameter = 60  # 泊松分布参数, 60秒一个订单到达
 
@@ -746,11 +746,11 @@ if __name__ == "__main__":
     # 输出商品总数
     print('商品总数：', len(warehouse.items))
 
-    # 生成一个月内的订单数据，并保存到orders.pkl文件中
-    generate_orders = GenerateData(warehouse, total_seconds, poisson_parameter)  # 生成订单数据对象
-    generate_orders.generate_orders()  # 生成一个月内的订单数据
+    # # 生成一个月内的订单数据，并保存到orders.pkl文件中
+    # generate_orders = GenerateData(warehouse, total_seconds, poisson_parameter)  # 生成订单数据对象
+    # generate_orders.generate_orders()  # 生成一个月内的订单数据
 
-    # 订单数据保存和读取位置
+    # 订单数据读取
     file_order = 'D:\Python project\DRL_Warehouse\data'
     with open(file_order + "\orders_{}.pkl".format(poisson_parameter), "rb") as f:
         orders = pickle.load(f)  # 读取订单数据

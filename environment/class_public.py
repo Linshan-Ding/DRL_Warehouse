@@ -34,7 +34,7 @@ class Config:
                 # 巷道的宽度
                 "aisle_width": 2,
                 # depot_position: 机器人的起始位置
-                "depot_position": (0, 0)
+                "depot_position": (18, 0)
             },
             "robot": {
                 # 短租机器人单位运行成本
@@ -42,7 +42,7 @@ class Config:
                 # 长租机器人单位运行成本
                 "long_term_unit_run_cost": 1000000/(3600*8*30*8*365),
                 # 机器人移动速度 m/s
-                "robot_speed": 1.5
+                "robot_speed": 3.0
             },
             "picker": {
                 # 短租拣货员单位时间雇佣成本 元/秒
@@ -50,7 +50,7 @@ class Config:
                 # 长租拣货员单位时间雇佣成本 元/秒
                 "long_term_unit_time_cost": 7000/(3600*8*30),
                 # 拣货员移动速度 m/s
-                "picker_speed": 0.67,
+                "picker_speed": 0.75,
                 # 拣货员辞退成本 元
                 "unit_fire_cost": 0
             },
