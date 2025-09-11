@@ -367,10 +367,11 @@ class PPOAgent(Config):
 
             # 反向传播与优化
             self.policy_optimizer.zero_grad()
-            self.value_optimizer.zero_grad()
             policy_loss.backward()
-            value_loss.backward()
             self.policy_optimizer.step()
+
+            self.value_optimizer.zero_grad()
+            value_loss.backward()
             self.value_optimizer.step()
 
         # 在更新后衰减熵系数
