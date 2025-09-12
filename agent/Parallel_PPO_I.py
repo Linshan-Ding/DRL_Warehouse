@@ -534,7 +534,7 @@ if __name__ == "__main__":
     with open(file_order + "\\orders_{}.pkl".format(poisson_parameter), "rb") as f:
         orders_test = pickle.load(f)
 
-    total_seconds = 30 * 8 * 3600
+    total_seconds = 3 * 8 * 3600
     warehouse.total_time = total_seconds
 
     policy_network = PolicyNetwork()
@@ -542,4 +542,4 @@ if __name__ == "__main__":
     ppo_agent = PPOAgent(policy_network, value_network)
 
     # 训练+周期性测试
-    train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=1000, n_envs=3)
+    train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=1000, n_envs=2)

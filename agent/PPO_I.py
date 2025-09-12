@@ -453,4 +453,4 @@ if __name__ == "__main__":
     # 初始化PPO代理
     ppo_agent = PPOAgent(policy_network, value_network)
     # 训练PPO代理
-    train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=3000)
+    train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=1000)
