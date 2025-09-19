@@ -5,11 +5,12 @@ import random
 import copy
 import pickle
 from data.warehouse import WarehouseEnv
-from environment.class_public import Config, Order
+from environment.class_public import Config
+from environment.class_warehouse import Order
 
 # 生成数据类
 class GenerateData(Config):
-    def __init__(self, warehouse, total_seconds, parameter=None):
+    def __init__(self, warehouse, total_seconds, parameter=None, order_n_items=None):
         super().__init__()  # 调用父类的构造函数
         self.parameter = self.parameters["order"]  # 订单参数
         self.warehouse = warehouse  # 仓库对象
@@ -21,6 +22,7 @@ class GenerateData(Config):
         else:
             self.poisson_parameter = parameter  # 泊松分布参数, n秒一个订单到达
             self.save_data = True
+        self.order_n_items = order_n_items  # 订单中的商品数量
 
     def generate_orders(self):
         """生成订单"""
@@ -31,12 +33,12 @@ class GenerateData(Config):
         # 订单到达时间
         arrival_time = 0
         while True:
-            # 订单中的商品数量
-            order_n_items = random.randint(self.parameter["order_n_items"][0], self.parameter["order_n_items"][1])
+            if self.order_n_items is None:
+                self.order_n_items = random.randint(self.parameter["order_n_items"][0], self.parameter["order_n_items"][1])
             # 仓库中的商品对象列表
             items_list = copy.deepcopy(list(self.warehouse.items.values()))
             # 从仓库所有商品字典中不重复抽样n_items个商品
-            items = random.sample(items_list, order_n_items)
+            items = random.sample(items_list, self.order_n_items)
             # 深复制items
             items = copy.deepcopy(items)
             # 创建订单对象
@@ -51,7 +53,7 @@ class GenerateData(Config):
 
         if self.save_data:
             # 将orders信息保存到D:\Python project\DRL_Warehouse\data文件夹中，并在命名中融合self.poisson_parameter信息
-            with open("D:\Python project\DRL_Warehouse\data\orders_{}.pkl".format(self.poisson_parameter), "wb") as f:
+            with open("D:\\Python project\\DRL_Warehouse\\data\\orders_{}_{}.pkl".format(self.poisson_parameter, self.order_n_items), "wb") as f:
                 pickle.dump(orders, f)
             print(f"Total number of orders: {len(orders)}")
 
@@ -63,16 +65,18 @@ if __name__ == "__main__":
     warehouse = WarehouseEnv()
     print('仓库中的商品种类数:', len(warehouse.items))  # 仓库中的商品种类数
     # 一个月的总秒数
-    total_seconds = 31 * 8 * 3600  # 31天
-
+    total_seconds = 31 * 8 * 3600  # 3天
     # 订单数据保存和读取位置
-    file_order = 'D:\Python project\DRL_Warehouse\data'
-    # 订单到达泊松分布参数
-    poisson_parameter = 120  # 泊松分布参数, n秒一个订单到达
+    file_order = 'D:\\Python project\\DRL_Warehouse\\data'
 
-    # 生成一个月内的订单数据，并保存到orders.pkl文件中
-    generate_orders = GenerateData(warehouse, total_seconds, poisson_parameter)  # 生成订单数据对象
-    orders = generate_orders.generate_orders()  # 生成一个月内的订单数据
+    poisson_parameter_list = [60, 120, 180] # 泊松分布参数列表
+    order_n_items_list = [10, 20, 30] # 订单中的商品数量列表
+
+    for poisson_parameter in poisson_parameter_list:
+        for order_n_items in order_n_items_list:
+            # 生成一个月内的订单数据，并保存到orders.pkl文件中
+            generate_orders = GenerateData(warehouse, total_seconds, poisson_parameter, order_n_items)
+            orders = generate_orders.generate_orders()  # 生成一个月内的订单数据
 
     # # 读取一个月内的订单数据，orders.pkl文件中
     # with open(file_order + "\orders_{}.pkl".format(poisson_parameter), "rb") as f:

@@ -421,10 +421,10 @@ def train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=1000):
 
 if __name__ == "__main__":
     # 订单数据保存和读取位置
-    file_order = 'D:\Python project\DRL_Warehouse\data'
+    file_order = 'D:/Python project/DRL_Warehouse/data'
     poisson_parameter = 120  # 测试算例泊松分布参数
     # 读取一个月内的订单数据，orders.pkl文件中
-    with open(file_order + "\orders_{}.pkl".format(poisson_parameter), "rb") as f:
+    with open(file_order + "/orders_{}.pkl".format(poisson_parameter), "rb") as f:
         orders_test = pickle.load(f)  # 读取订单数据
 
     # 一个月的总秒数

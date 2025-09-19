@@ -1,6 +1,9 @@
 """
 定义了公共的类
 """
+import random
+import numpy as np
+
 # -------------参数定义类----------------
 class Config:
     def __init__(self):
@@ -87,47 +90,3 @@ class Config:
         }
 
         return parameters
-
-# -------------订单类----------------
-class Order(Config):
-    def __init__(self, order_id, items, arrive_time=0, due_time=None):
-        """
-        订单类
-        :param order_id:  订单编号
-        :param items:  订单中的商品列表
-        :param arrive_time:  订单到达时间
-        :param due_time:  订单交期
-        """
-        super().__init__()  # 调用父类的构造函数
-        self.parameter = self.parameters["order"]  # 订单参数
-        self.order_id = order_id  # 订单的编号
-        self.items = items  # 订单中的商品列表
-        self.arrive_time = arrive_time  # 订单到达时间
-        self.due_time = None  # 订单交期
-        self.complete_time = None  # 订单拣选完成时间
-        # 订单中的未拣选完成的商品列表
-        self.unpicked_items = items
-        # 订单中的已拣选完成的商品列表
-        self.picked_items = []
-        # 订单交期
-        self.due_time = due_time
-        # 订单单位延期成本
-        self.unit_delay_cost = self.parameter["unit_delay_cost"]
-
-    # 订单延期总成本
-    def total_delay_cost(self, current_time):
-        """
-        计算订单延期总成本
-        :param current_time: 当前时间
-        :return: 订单延期总成本
-        """
-        if self.complete_time is None:
-            if current_time < self.due_time:
-                return 0
-            else:
-                return (current_time - self.due_time) * self.unit_delay_cost
-        else:
-            if self.complete_time <= self.due_time:
-                return 0
-            else:
-                return (self.complete_time - self.due_time) * self.unit_delay_cost

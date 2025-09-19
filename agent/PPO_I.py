@@ -2,6 +2,7 @@
 PPO agent：Proximal Policy Optimization
 调整每个决策点机器人和拣货员的数量：拣货员+日租
 """
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -436,14 +437,14 @@ def train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=1000):
 
 if __name__ == "__main__":
     # 订单数据保存和读取位置
-    file_order = 'D:\Python project\DRL_Warehouse\data'
+    file_order = 'D:/Python project/DRL_Warehouse/data'
     poisson_parameter = 120  # 测试算例泊松分布参数
     # 读取一个月内的订单数据，orders.pkl文件中
-    with open(file_order + "\orders_{}.pkl".format(poisson_parameter), "rb") as f:
+    with open(file_order + "/orders_{}.pkl".format(poisson_parameter), "rb") as f:
         orders_test = pickle.load(f)  # 读取订单数据
 
     # 一个月的总秒数
-    total_seconds = 30 * 8 * 3600  # 30天
+    total_seconds = 30 * 8 * 3600  # 3天
     # 基于上述一个月内的订单数据和仓库环境数据，实现仓库环境的仿真
     warehouse.total_time = total_seconds  # 仿真总时间
 

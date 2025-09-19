@@ -1,181 +1,20 @@
 """
 智能仓库人机协同拣选系统仿真环境
-用于订单数据的生成和读取
+1、待分配拣货位选择最近的空闲拣货员
+2、机器人和拣货员被移除后，完成当前订单拣选任务后，再移除
+3、每个区最少一个拣货员，整个仓库最少一个机器人
+4、同一拣货位的不同商品的拣选时间需要叠加
+5、机器人移动到depot_position后，进行打包操作，打包时间为定值
 """
 import numpy as np
 import random
-import gym
+import pickle
+import gymnasium as gym
 from environment.class_public import Config
+import copy
+from environment.class_warehouse import PickPoint, StorageBin, Item, Depot, Robot, Picker
 
-
-# 商品类
-class Item(Config):
-    def __init__(self, item_id, bin_id, position, area_id, pick_point_id):
-        super().__init__()  # 调用父类的构造函数
-        self.parameter = self.parameters["item"]  # 商品参数
-        self.item_id = item_id  # 商品的编号
-        self.bin_id = bin_id  # 商品所在的储货位编号
-        self.position = position  # 商品所在的位置
-        self.area_id = area_id  # 商品所在的区域编号
-        self.pick_point_id = pick_point_id  # 商品所属拣货位的编号
-        self.pick_time = self.parameter["pick_time"]  # 商品拣选时间
-        self.pick_complete_time = 0  # 商品拣选完成时间
-
-
-# 起始点类
-class Depot:
-    def __init__(self, position):
-        self.position = position  # 起始点的位置
-
-
-# 储货位类
-class StorageBin:
-    def __init__(self, bin_id, position, area_id, item_id, pick_point_id):
-        self.bin_id = bin_id  # 储货位的编号
-        self.position = position  # 储货位的位置
-        self.item_id = item_id  # 储货位中的商品编号
-        self.pick_point_id = pick_point_id  # 储货位所属拣货位的编号
-        # 储货位所属区域的编号
-        self.area_id = area_id
-        # 当前储货位的机器人对象队列
-        self.robot_queue = []
-        # 当前储货位的拣货员对象
-        self.picker = None
-
-
-# 拣货位类
-class PickPoint:
-    def __init__(self, point_id, position, area_id, item_ids, storage_bin_ids):
-        self.point_id = point_id  # 拣货位的编号
-        self.position = position  # 拣货位的位置
-        self.area_id = area_id  # 拣货位所属区域的编号
-        self.item_ids = item_ids  # 拣货位中的商品编号列表
-        self.storage_bin_ids = storage_bin_ids  # 拣货位对应的储货位编号列表
-        self.robot_queue = [] # 当前拣货位的机器人对象队列
-        self.picker = None  # 拣货员对象
-        # 拣货位的未拣货商品列表
-        self.unpicked_items = []
-
-    # 监测拣货位置是否待分配拣货员
-    @property
-    def is_idle(self):
-        # 如果拣货位上未分配拣货员且机器人队列中有机器人，则返回True
-        if len(self.robot_queue) > 0 and self.picker is None:
-            return True
-        # 如果拣货位上有拣货员，则返回False
-        else:
-            return False
-
-#  -------------------------机器人类---------------------------
-class Robot(Config):
-    def __init__(self, position):
-        super().__init__()
-        self.parameter = self.parameters["robot"]  # 机器人参数
-        self.position = position  # 机器人的位置
-        self.pick_point = None  # 机器人当前拣货位
-        self.order = None  # 机器人关联的订单
-        self.item_pick_order = []  # 机器人剩余未拣选商品的对象列表（按拣选顺序排序）
-        self.state = 'idle'  # 机器人所处状态：'idle', 'busy'
-        self.speed = self.parameter["robot_speed"]  # 机器人移动速度
-        self.unit_time_cost = self.parameter["short_term_unit_run_cost"]  # 机器人单位运行成本
-        self.pick_point_complete_time = 0  # 机器人在当前拣货位的拣货完成时间
-        self.move_to_pick_point_time = 0  # 机器人移动到拣货位的时间
-        self.move_to_depot_time = 0  # 机器人移动到depot_position的时间
-        self.working_time = 0  # 机器人工作时间
-        self.run_start_time = None  # 机器人运行开始时间
-        self.run_end_time = None # 机器人运行结束时间
-        self.remove = False  # 机器人移除标识
-
-    def assign_order(self, order):
-        """为机器人分配订单"""
-        self.order = order
-        self.plan_item_order()
-
-    def plan_item_order(self):
-        """订单中的商品对象拣选顺序规划"""
-        if self.order is not None:
-            self.item_pick_order = [item for item in self.order.items]
-            # 商品对象按照其拣货位的位置进行排序（按位置X坐标从小到大重排序，相同X坐标的按照Y坐标从小到大进行排序）
-            self.item_pick_order = sorted(self.item_pick_order, key=lambda x: (x.position[0], x.position[1]))
-        else:
-            self.item_pick_order = []
-
-    # 返回机器人在当前拣货位拣货完成后的下一个拣货位
-    def next_pick_point(self, pick_points):
-        if self.item_pick_order:
-            next_item = self.item_pick_order[0]
-            next_pick_point = next_item.pick_point_id
-            return pick_points[next_pick_point]
-        return None
-
-    # 当前时刻机器人总的运行成本
-    def total_run_cost(self, current_time):
-        if self.run_end_time is None:
-            run_time = current_time - self.run_start_time
-            total_cost = run_time * self.unit_time_cost
-            return total_cost
-        else:
-            run_time = self.run_end_time - self.run_start_time
-            total_cost = run_time * self.unit_time_cost
-            return total_cost
-
-    # 机器人关联订单中属于当前拣货位的商品列表
-    @property
-    def items(self):
-        if self.order is not None:
-            items = []  # 机器人关联订单中属于当前拣货位的商品列表
-            for item in self.order.items:
-                if item.pick_point_id == self.pick_point.point_id:
-                    items.append(item)
-            return items
-        return None
-
-
-# -------------------------拣货员类---------------------------
-class Picker(Config):
-    def __init__(self, area_id):
-        super().__init__()  # 调用父类的构造函数
-        self.parameter = self.parameters["picker"]  # 拣货员参数
-        self.pick_point = None  # 拣货员当前拣货位
-        self.position = None  # 拣货员的位置
-        self.item = None  # 拣货员待拣选或正在拣选的商品
-        self.state = 'idle'  # 拣货员状态：'idle', 'busy'
-        self.speed = self.parameter["picker_speed"]  # 拣货员移动速度
-        self.area_id = area_id  # 拣货员所在区域的编号
-        self.unit_time_cost = self.parameter["short_term_unit_time_cost"]  # 拣货员单位时间雇佣成本
-        self.storage_bins = []  # 拣货员负责的储货位列表
-        self.pick_points = []  # 拣货员负责的拣货位列表
-        self.working_time = 0  # 拣货员工作时间
-        self.pick_start_time = 0  # 拣货员在当前拣货位拣货开始时间
-        self.pick_end_time = 0  # 拣货员在当前拣货位拣货结束时间
-        self.remove = False  # 拣货员移除标识
-        # 辞退成本
-        self.unit_fire_cost = self.parameter["unit_fire_cost"]
-        # 聘用开始时间
-        self.hire_time = None
-        # 解聘时间
-        self.fire_time = None
-
-    # 当前时刻拣货员总的雇佣成本
-    def total_hire_cost(self, current_time):
-        if self.fire_time is None:
-            hire_time = current_time - self.hire_time
-            total_cost = hire_time * self.unit_time_cost
-            return total_cost
-        else:
-            hire_time = self.fire_time - self.hire_time
-            total_cost = hire_time * self.unit_time_cost + self.unit_fire_cost
-            return total_cost
-
-    # 根据负责的拣货位列表中的拣货位的坐标计算拣货员的初始位置（取各拣货位的坐标均值）
-    @property
-    def initial_position(self):
-        x = np.mean([point.position[0] for point in self.pick_points])
-        y = np.mean([point.position[1] for point in self.pick_points])
-        position = (x, y)
-        return position
-
-
+"""长短期结合租赁的仓库人机协同拣选系统仿真环境"""
 # -------------------------仓库环境类---------------------------
 # 包括机器人、拣货员、拣货位、储货位和商品
 # 步进函数step()实现仓库环境的仿真
@@ -315,11 +154,12 @@ class WarehouseEnv(gym.Env, Config):
             return abs(y1 - y2)
         # 计算从上部绕过和从下部绕过的路径，选择最短路径，并返回路径长度
         else:
-            path1 = abs(y1 - self.S_b) + abs(y2 - self.S_b) + abs(x1 - x2)
-            path2 = abs(y1 - (self.S_b + self.N_l * self.S_l)) + abs(y2 - (self.S_b + self.N_l * self.S_l)) + abs(x1 - x2)
+            path1 = abs(y1 - self.S_b/2) + abs(y2 - self.S_b/2) + abs(x1 - x2)
+            path2 = (abs(y1 - (self.S_b*1.5 + self.N_l*self.S_l)) + abs(y2 - (self.S_b*1.5 + self.N_l*self.S_l))
+                     + abs(x1 - x2))
             return min(path1, path2)
 
-    def adjust_robots_and_pickers(self, n_robots, n_pickers_dict):
+    def adjust_robots_and_pickers(self, n_robots, n_pickers_dict, first_step=False):
         """为仓库中添加初始化的机器人和每个区域的拣货员"""
         # 更新每个区域中拣货员数量
         for area_id in self.area_ids:
@@ -333,6 +173,12 @@ class WarehouseEnv(gym.Env, Config):
                     self.pickers_area[area_id].append(picker)  # 将拣货员加入到对应区域的拣货员列表中
                     self.pickers.append(picker)  # 将拣货员加入到拣货员列表中
                     self.pickers_added.append(picker)  # 将拣货员加入到已添加过的拣货员列表中
+                    if first_step:
+                        picker.rent = 'long'
+                        picker.unit_time_cost = picker.parameter["long_term_unit_time_cost"]
+                    else:
+                        picker.rent = 'short'
+                        picker.unit_time_cost = picker.parameter["short_term_unit_time_cost"]
             # 如果该区域添加的拣货员数量等于0
             elif n_pickers_dict[area_id] == 0:
                 pass
@@ -340,18 +186,20 @@ class WarehouseEnv(gym.Env, Config):
             else:
                 # 从各区域移除拣货员，优先移除空闲的拣货员，若无空闲拣货员，则移除忙碌的拣货员
                 for i in range(abs(n_pickers_dict[area_id])):
-                    # 若该区域移除标识为False的拣货员数量小于等于1，则跳出循环
-                    if len([picker for picker in self.pickers_area[area_id] if picker.remove is False]) <= 1:
+                    # 若该区域移除标识为False且为短租的拣货员数量小于等于0，则跳出循环
+                    false_short_pickers = [picker for picker in self.pickers_area[area_id]
+                                           if picker.remove is False and picker.rent == 'short']
+                    if len(false_short_pickers) <= 0:
                         break
-                    else:  # 若该区域移除标识为False的拣货员数量大于1, 则移除拣货员
-                        if len(self.idle_pickers[area_id]) > 0:   # 若该区域有空闲拣货员
-                            picker = self.idle_pickers[area_id].pop(0)  # 从空闲拣货员列表中移除拣货员
+                    else:  # 若该区域移除标识为False且为短租的拣货员数量大于0, 则移除拣货员
+                        if len(self.idle_short_rent_pickers[area_id]) > 0:   # 若该区域有空闲短租拣货员
+                            picker = self.idle_short_rent_pickers[area_id].pop(0)  # 从空闲拣货员列表中移除拣货员
                             picker.remove = True  # 设置拣货员移除标识
                             self.pickers_area[area_id].remove(picker)  # 从对应区域的拣货员列表中移除拣货员
                             self.pickers.remove(picker)  # 从拣货员列表中移除拣货员
                             picker.fire_time = self.current_time  # 设置拣货员的解聘时间
                         else:  # 若该区域无空闲拣货员
-                            picker = self.pickers_area[area_id][0]  # 从对应区域的拣货员列表中选择第一个拣货员
+                            picker = false_short_pickers[0]  # 从对应区域的拣货员列表中选择第一个拣货员
                             picker.remove = True  # 设置拣货员移除标识
         # 更新机器人数量
         if n_robots > 0:
@@ -362,23 +210,30 @@ class WarehouseEnv(gym.Env, Config):
                 self.robots_at_depot.append(robot)  # 将机器人加入到depot_position位置的机器人列表中
                 robot.run_start_time = self.current_time  # 设置机器人的运行开始时间
                 self.robots_added.append(robot)  # 将机器人加入到已添加过的机器人列表中
+                if first_step :
+                    robot.rent = 'long'
+                    robot.unit_time_cost = robot.parameter["long_term_unit_run_cost"]
+                else:
+                    robot.rent = 'short'
+                    robot.unit_time_cost = robot.parameter["short_term_unit_run_cost"]
         elif n_robots == 0:
             pass
         else:
             # 移除机器人，优先移除空闲的机器人，若无空闲机器人，则移除其他位置的机器人
             for i in range(abs(n_robots)):
-                # 若移除标识符为False的机器人数量小于等于1，则跳出循环
-                if len([robot for robot in self.robots if robot.remove is False]) <= 1:
+                # 若移除标识符为False且为短租的机器人数量小于等于0，则跳出循环
+                false_short_robots = [robot for robot in self.robots if robot.remove is False and robot.rent == 'short']
+                if len(false_short_robots) <= 0:
                     break
-                else:  # 若移除标识符为False的机器人数量大于1, 则移除机器人
-                    if len(self.idle_robots) > 0:  # 若有空闲机器人
-                        robot = self.idle_robots.pop(0)  # 从空闲机器人列表中移除机器人
+                else:  # 若移除标识符为False且为短租的机器人数量大于1, 则移除机器人
+                    if len(self.idle_short_rent_robts) > 0:  # 若有空闲机器人
+                        robot = self.idle_short_rent_robts.pop(0)  # 从空闲机器人列表中移除机器人
                         robot.remove = True  # 设置机器人移除标识
                         self.robots.remove(robot)  # 从机器人列表中移除机器人
                         self.robots_at_depot.remove(robot)  # 从depot_position位置的机器人列表中移除机器人
                         robot.run_end_time = self.current_time  # 设置机器人的运行结束时间
                     else: # 若无空闲机器人
-                        robot = self.robots[0]  # 从机器人列表中选择第一个机器人
+                        robot = false_short_robots[0]  # 从机器人列表中选择第一个机器人
                         robot.remove = True  # 设置机器人移除标识
 
     def reset(self, orders):
@@ -428,25 +283,26 @@ class WarehouseEnv(gym.Env, Config):
         self.state = self.state_extractor()
         return self.state
 
-    def step(self, action):
+    def step(self, action, first_step=False):
         """
         仓库环境的仿真步进函数：每个决策点执行一次step()函数。
         决策点：时钟移动到每天的开始时刻时。
         离散点：新订单到达时刻、拣货员空闲时刻、机器人移动到拣货点时刻，机器人空闲时刻。
         action: 每天的开始时刻机器人和各区域内拣货员的调整值。
         """
-        self.action = action  # 动作
-        self.adjust_robots = action[0]  # 动作调整的机器人数量
+        self.action = np.round(action).astype(int) # 动作
+        self.adjust_robots = self.action[0]  # 动作调整的机器人数量
         # 如果当前机器人总数调整后小于或等于0，则设置调整数量为当前总数-1的负数
         if len(self.robots) + self.adjust_robots <= 0:
             self.adjust_robots = -len(self.robots) + 1
-        self.adjust_pickers_dict = {area_id: action[i] for i, area_id in enumerate(self.area_ids, start=1)}  # 动作调整的每个区域的拣货员数量
+        self.adjust_pickers_dict = {area_id: self.action[i] for i, area_id in enumerate(self.area_ids, start=1)}  # 动作调整的每个区域的拣货员数量
         # 如果当前区域拣货员数量调整后小于或等于0，则设置调整数量为当前区域拣货员数量-1的负数
         for area_id in self.area_ids:
             if len(self.pickers_area[area_id]) + self.adjust_pickers_dict[area_id] <= 0:
                 self.adjust_pickers_dict[area_id] = -len(self.pickers_area[area_id]) + 1
         # 执行动作，调整仓库中的机器人和拣货员数量
-        self.adjust_robots_and_pickers(self.adjust_robots, self.adjust_pickers_dict)
+        self.adjust_robots_and_pickers(self.adjust_robots, self.adjust_pickers_dict, first_step)
+
         # 一天的仿真时间
         one_day = 8 * 3600
         # 当前step结束时间
@@ -467,7 +323,7 @@ class WarehouseEnv(gym.Env, Config):
             new_order_arrival_time = self.orders_not_arrived[0].arrive_time  # 新订单到达时刻
             pickers_pick_complete_time = [picker.pick_end_time for picker in self.pickers]  # 所有拣货员拣货完成时刻
             robots_pick_complete_time = [robot.pick_point_complete_time for robot in self.robots]  # 所有机器人在拣货点拣完商品时刻
-            robots_move_to_pick_point_time = [robot.move_to_pick_point_time for robot in self.robots]  # 所有机器人移动到拣货点并打包完成时刻
+            robots_move_to_pick_point_time = [robot.move_to_pick_point_time for robot in self.robots]  # 所有机器人移动到拣货点时刻
             robots_move_to_depot_time = [robot.move_to_depot_time for robot in self.robots]  # 所有机器人移动到depot_position时刻
             # 所有离散时刻
             discrete_times = ([new_order_arrival_time] + pickers_pick_complete_time +
@@ -551,7 +407,7 @@ class WarehouseEnv(gym.Env, Config):
 
             # 5、若当前时间等于机器人移动到depot_position时刻，则更新机器人的状态，重置机器人的订单对象
             for robot in self.robots:
-                # 若机器人移动到depot_position并打包完成时刻
+                # 若机器人移动到depot_position时刻
                 if self.current_time == robot.move_to_depot_time:
                     robot.state = 'idle'  # 更新机器人的状态
                     self.orders_uncompleted.remove(robot.order)  # 从未拣选完成的订单列表中移除该订单
@@ -565,10 +421,13 @@ class WarehouseEnv(gym.Env, Config):
                         self.robots_at_depot.remove(robot)  # 从depot_position位置的机器人列表中移除机器人
                         robot.run_end_time = self.current_time  # 设置机器人的运行结束时间
 
+            # 当前离散点状态更新
+            self.state = self.state_extractor()
+
         """判断是否结束仿真"""
         if self.current_time >= self.total_time:
             self.done = True
-            print("仿真结束时刻", self.current_time)
+            # print("仿真结束时刻", self.current_time)
 
         # 提取当前状态，计算回报值
         self.state = self.state_extractor()  # 提取当前状态
@@ -614,10 +473,13 @@ class WarehouseEnv(gym.Env, Config):
     def assign_pick_point_to_picker(self, area_id):
         """当前区域同时存在空闲拣货员和待分配拣货员的拣货位时"""
         while len(self.idle_pickers[area_id]) > 0 and len(self.idle_pick_points[area_id]) > 0:
-            # 随机选择一个待分配拣货位
-            pick_point = random.choice(self.idle_pick_points[area_id])
-            # 选择距离该拣货位最近的空闲拣货员
-            picker = min(self.idle_pickers[area_id], key=lambda picker: self.shortest_path_between_pick_points(picker, pick_point))
+            # 获取当前区域所有空闲拣货员和待分配拣货位的组合
+            idle_pickers_in_area = self.idle_pickers[area_id]
+            idle_pick_points_in_area = self.idle_pick_points[area_id]
+            # 随机选择一个拣货员
+            picker = random.choice(idle_pickers_in_area)
+            # 基于next_pick_point函数选择一个待分配拣货位
+            pick_point = picker.next_pick_point(idle_pick_points_in_area)
             # 为拣货员分配拣货位
             picker.pick_point = pick_point
             # 为拣货位分配拣货员
@@ -678,11 +540,25 @@ class WarehouseEnv(gym.Env, Config):
     def idle_robots(self):
         return [robot for robot in self.robots if robot.state == 'idle']
 
+    # 当前连点空闲短租机器人列表
+    @ property
+    def idle_short_rent_robts(self):
+        return [robot for robot in self.robots if robot.state == 'idle' and robot.rent == 'short']
+
     # 当前离散点每个区域的空闲拣货员列表
     @ property
     def idle_pickers(self):
         # 每个区域的空闲拣货员列表字典
-        idle_pickers_area = {area_id: [picker for picker in self.pickers_area[area_id] if picker.state == 'idle'] for area_id in self.area_ids}
+        idle_pickers_area = {area_id: [picker for picker in self.pickers_area[area_id]
+                                       if picker.state == 'idle'] for area_id in self.area_ids}
+        return idle_pickers_area
+
+    # 当前离散点每个区域短租拣货员列表
+    @ property
+    def idle_short_rent_pickers(self):
+        # 每个区域的空闲拣货员列表字典
+        idle_pickers_area = {area_id: [picker for picker in self.pickers_area[area_id]
+                                       if picker.state == 'idle' and picker.rent == 'short'] for area_id in self.area_ids}
         return idle_pickers_area
 
     # 当前离散点每个区域待分配拣货员的拣货位列表
@@ -706,3 +582,53 @@ class WarehouseEnv(gym.Env, Config):
         # 每个拣货位未拣货商品数量列表
         unpicked_items_list = [len(point.unpicked_items) for point in self.pick_points.values()]
         return unpicked_items_list
+
+
+if __name__ == "__main__":
+    # 基于仓库中的商品创建一个月内的订单对象，每个订单包含多个商品，订单到达时间服从泊松分布，仿真周期设置为一个月
+    # 一个月的总秒数
+    total_seconds = 3 * 8 * 3600  # 3天
+    # 订单到达泊松分布参数
+    poisson_parameter = 60  # 泊松分布参数, 60秒一个订单到达
+
+    # 初始化仓库环境
+    warehouse = WarehouseEnv()
+    # 输出储货位总数
+    print('储货位总数：', len(warehouse.storage_bins))
+    # 输出商品总数
+    print('商品总数：', len(warehouse.items))
+
+    # # 生成一个月内的订单数据，并保存到orders.pkl文件中
+    # generate_orders = GenerateData(warehouse, total_seconds, poisson_parameter)  # 生成订单数据对象
+    # generate_orders.generate_orders()  # 生成一个月内的订单数据
+
+    # 订单数据读取
+    file_order = 'D:\\Python project\\DRL_Warehouse\\data'
+    with open(file_order + "\\orders_{}.pkl".format(poisson_parameter), "rb") as f:
+        orders = pickle.load(f)  # 读取订单数据
+
+    # 基于上述一个月内的订单数据和仓库环境数据，实现仓库环境的仿真
+    warehouse.total_time = total_seconds  # 仿真总时间
+
+    # 多个循环
+    for epoch in range(1000):
+        orders_object = copy.deepcopy(orders)
+        # 订单数量
+        print('订单数量：', len(orders_object))
+        # 仿真总时间一个月
+        warehouse.reset(orders_object)  # 重置仓库环境
+        total_reward = 0  # 总奖励
+        while not warehouse.done:
+            n_robot = random.randint(-50, 50)  # 机器人数量调整值
+            n_picker_area = random.randint(-50, 50)  # 拣货员数量调整值
+            action = [n_robot, n_picker_area, n_picker_area, n_picker_area]  # 每个区域的拣货员数量增加1，机器人数量增加1
+            # 仓库环境的仿真步进函数
+            state, reward, done = warehouse.step(action)
+            total_reward += reward  # 累计奖励
+            # 输出当前状态
+            # print(f"Current state: {warehouse.state}")
+            # print(f"Current time: {warehouse.current_time}")  # 当前时间
+            # print("-----------------------------------------------------------------------------------------------------------------------------------------------")
+
+        # 仿真结束后输出总奖励
+        print(f"Total reward: {total_reward}")
