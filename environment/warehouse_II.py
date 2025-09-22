@@ -406,6 +406,9 @@ class WarehouseEnv(gym.Env, Config):
                         self.robots_at_depot.remove(robot)  # 从depot_position位置的机器人列表中移除机器人
                         robot.run_end_time = self.current_time  # 设置机器人的运行结束时间
 
+            # 当前离散点状态更新
+            self.state = self.state_extractor()
+
         """判断是否结束仿真"""
         if self.current_time >= self.total_time:
             self.done = True

@@ -138,7 +138,7 @@ class Robot(Config):
         # 1：选择x坐标值最小的拣货位；2：选择距离最近的拣货位；3：选择排队机器人数量最少的拣货位；
         # 4：选择排队机器人数量最多的拣货位；5：选择待拣选商品最少的拣货位；6：选择待拣选商品最多的拣货位；
         # 7: 随机选择一个拣货位
-        self.pick_point_selection_rule = 1
+        self.pick_point_selection_rule = 2
 
     def assign_order(self, order):
         """为机器人分配订单"""
@@ -254,7 +254,7 @@ class Picker(Config):
         # 1：选择x坐标值最小的拣货位；2：选择距离最近的拣货位；3：选择排队机器人数量最少的拣货位；
         # 4：选择排队机器人数量最多的拣货位；5：选择待拣选商品最少的拣货位；6：选择待拣选商品最多的拣货位；
         # 7: 随机选择一个拣货位
-        self.pick_point_selection_rule = 1
+        self.pick_point_selection_rule = 2
 
     # 当前时刻拣货员总的雇佣成本
     def total_hire_cost(self, current_time):
