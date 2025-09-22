@@ -412,13 +412,15 @@ def train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=1000):
         with torch.no_grad():
             state = test_env.reset(orders_test) # 重置环境并获取初始状态
             done = False
+            first_step = True
             total_reward = 0
             while not done:
                 action, log_prob = ppo_agent.select_action(state)
-                next_state, reward, done = test_env.step(action)
+                next_state, reward, done = test_env.step(action, first_step)
                 ppo_agent.store_reward_and_next_state(len(ppo_agent.memory) - 1, reward, done, next_state)
                 state = next_state
                 total_reward += reward
+                first_step = False
 
         print(f"Episode {episode + 1}/{num_episodes}, Total Reward: {total_reward}")
 

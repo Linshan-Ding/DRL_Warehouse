@@ -588,9 +588,10 @@ class WarehouseEnv(gym.Env, Config):
 if __name__ == "__main__":
     # 基于仓库中的商品创建一个月内的订单对象，每个订单包含多个商品，订单到达时间服从泊松分布，仿真周期设置为一个月
     # 一个月的总秒数
-    total_seconds = 3 * 8 * 3600  # 3天
+    total_seconds = (8 * 3600) * 3  # 3天
     # 订单到达泊松分布参数
-    poisson_parameter = 60  # 泊松分布参数, 60秒一个订单到达
+    poisson_parameter = 120  # 泊松分布参数, 60秒一个订单到达
+    num_items = 20
 
     # 初始化仓库环境
     warehouse = WarehouseEnv()
@@ -604,8 +605,8 @@ if __name__ == "__main__":
     # generate_orders.generate_orders()  # 生成一个月内的订单数据
 
     # 订单数据读取
-    file_order = 'D:\\Python project\\DRL_Warehouse\\data'
-    with open(file_order + "\\orders_{}.pkl".format(poisson_parameter), "rb") as f:
+    file_order = 'D:\\Python project\\DRL_Warehouse\\data\\instances'
+    with open(file_order + "\\orders_{}_{}.pkl".format(poisson_parameter, num_items), "rb") as f:
         orders = pickle.load(f)  # 读取订单数据
 
     # 基于上述一个月内的订单数据和仓库环境数据，实现仓库环境的仿真

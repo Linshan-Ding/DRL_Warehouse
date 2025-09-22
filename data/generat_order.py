@@ -65,7 +65,7 @@ if __name__ == "__main__":
     warehouse = WarehouseEnv()
     print('仓库中的商品种类数:', len(warehouse.items))  # 仓库中的商品种类数
     # 一个月的总秒数
-    total_seconds = 31 * 8 * 3600  # 3天
+    total_seconds = (8 * 3600) * 31  # 3天
     # 订单数据保存和读取位置
     file_order = 'D:\\Python project\\DRL_Warehouse\\data'
 
