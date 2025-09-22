@@ -450,7 +450,7 @@ if __name__ == "__main__":
         orders_test = pickle.load(f)  # 读取订单数据
 
     # 一个月的总秒数
-    total_seconds = (8 * 3600) * 3  # 30天
+    total_seconds = (8 * 3600) * 30  # 30天
     # 基于上述一个月内的订单数据和仓库环境数据，实现仓库环境的仿真
     warehouse.total_time = total_seconds  # 仿真总时间
 
