@@ -14,6 +14,7 @@ from data.generat_order import GenerateData
 from visdom import Visdom
 import csv
 from environment.class_public import Config
+import random
 
 # 设置训练数据可视化
 viz = Visdom(env='PPO_III')
@@ -368,6 +369,20 @@ class PPOAgent(Config):
         # 清空记忆
         self.memory = []
 
+
+# 订单对象读取函数
+def get_order_object(poisson_parameter, num_items):
+    """
+    :param poisson_parameter: 泊松分布参数
+    :param num_items: 订单中商品数量
+    :return: 读取的订单对象
+    """
+    file_order = 'D:/Python project/DRL_Warehouse/data/instances'
+    with open(file_order + "/orders_{}_{}.pkl".format(poisson_parameter, num_items), "rb") as f:
+        orders = pickle.load(f)  # 读取订单数据
+    return orders
+
+
 # 定义训练函数
 def train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=1000):
     total_cost = float('inf')  # 初始化总成本
@@ -375,9 +390,12 @@ def train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=1000):
     test_env = copy.deepcopy(warehouse)  # 测试环境
     for episode in range(num_episodes):
         # ====================训练=============================
-        total_seconds = 31 * 8 * 3600  # 31天
-        generate_orders = GenerateData(warehouse, total_seconds)  # 生成订单数据对象
-        orders = generate_orders.generate_orders()  # 生成一个月内的订单数据
+        # total_seconds = 31 * 8 * 3600  # 31天
+        # generate_orders = GenerateData(warehouse, total_seconds)  # 生成订单数据对象
+        # orders = generate_orders.generate_orders()  # 生成一个月内的订单数据
+        poisson_parameter = random.choice([60, 120, 180])  # 随机选择泊松分布参数
+        num_items = random.choice([10, 20, 30])  # 随机选择订单中商品数量
+        orders = get_order_object(poisson_parameter, num_items)  # 读取订单对象
         state = train_env.reset(orders)  # 重置环境并获取初始状态
         done = False
         first_step = True
@@ -410,7 +428,7 @@ def train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=1000):
         # 保存模型
         if total_cost >= -total_reward:
             torch.save(ppo_agent.policy.state_dict(), f"policy_network_PPO_III.pth")
-            torch.save(ppo_agent.value_network.state_dict(), f"value_network_PPO_III.pth")
+            # torch.save(ppo_agent.value_network.state_dict(), f"value_network_PPO_III.pth")
             total_cost = - total_reward
 
         # 保存训练数据
@@ -421,14 +439,15 @@ def train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=1000):
 
 if __name__ == "__main__":
     # 订单数据保存和读取位置
-    file_order = 'D:/Python project/DRL_Warehouse/data'
+    file_order = 'D:/Python project/DRL_Warehouse/data/instances'
     poisson_parameter = 120  # 测试算例泊松分布参数
+    num_items = 20  # 订单中的商品数量
     # 读取一个月内的订单数据，orders.pkl文件中
-    with open(file_order + "/orders_{}.pkl".format(poisson_parameter), "rb") as f:
+    with open(file_order + "/orders_{}_{}.pkl".format(poisson_parameter, num_items), "rb") as f:
         orders_test = pickle.load(f)  # 读取订单数据
 
     # 一个月的总秒数
-    total_seconds = 30 * 8 * 3600  # 30天
+    total_seconds = (8 * 3600) * 3  # 30天
     # 基于上述一个月内的订单数据和仓库环境数据，实现仓库环境的仿真
     warehouse.total_time = total_seconds  # 仿真总时间
 
@@ -438,4 +457,4 @@ if __name__ == "__main__":
     # 初始化PPO代理
     ppo_agent = PPOAgent(policy_network, value_network)
     # 训练PPO代理
-    train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=3000)
+    train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=1000)
