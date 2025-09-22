@@ -584,7 +584,7 @@ if __name__ == "__main__":
     # generate_orders.generate_orders()  # 生成一个月内的订单数据
 
     # 订单数据读取
-    file_order = 'D:\\Python project\\DRL_Warehouse\\data'
+    file_order = 'D:\\Python project\\DRL_Warehouse\\data\\instances'
     with open(file_order + "\\orders_{}_{}.pkl".format(poisson_parameter, num_items), "rb") as f:
         orders = pickle.load(f)  # 读取订单数据
 
