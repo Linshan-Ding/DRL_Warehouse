@@ -430,7 +430,7 @@ def train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=1000):
         # 保存模型
         if total_cost >= -total_reward:
             torch.save(ppo_agent.policy.state_dict(), f"policy_network_PPO_III.pth")
-            # torch.save(ppo_agent.value_network.state_dict(), f"value_network_PPO_III.pth")
+            torch.save(ppo_agent.value_network.state_dict(), f"value_network_PPO_III.pth")
             total_cost = - total_reward
 
         # 保存训练数据
