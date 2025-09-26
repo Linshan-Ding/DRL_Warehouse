@@ -2,7 +2,6 @@
 PPO agent：Proximal Policy Optimization
 调整每个决策点机器人和拣货员的数量：拣货员+日租
 """
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -403,7 +402,7 @@ def train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=1000):
     total_cost = float('inf')  # 初始化总成本
     train_env = copy.deepcopy(warehouse)  # 训练环境
     test_env = copy.deepcopy(warehouse)  # 测试环境
-    for episode in range(num_episodes):
+    for episode in range(224, num_episodes):
         # ====================训练=============================
         # total_seconds = 31 * 8 * 3600  # 31天
         # generate_orders = GenerateData(warehouse, total_seconds)  # 生成订单数据对象
@@ -469,6 +468,10 @@ if __name__ == "__main__":
     # 初始化网络
     policy_network = PolicyNetwork()
     value_network = ValueNetwork()
+    # 为策略网络和值网络加载模型参数
+    policy_network.load_state_dict(torch.load("policy_network_PPO_I.pth"))
+    value_network.load_state_dict(torch.load("value_network_PPO_I.pth"))
+
     # 初始化PPO代理
     ppo_agent = PPOAgent(policy_network, value_network)
     # 训练PPO代理
