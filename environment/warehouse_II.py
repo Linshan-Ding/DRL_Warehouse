@@ -315,6 +315,8 @@ class WarehouseEnv(gym.Env, Config):
                               robots_pick_complete_time + robots_move_to_pick_point_time + robots_move_to_depot_time)
             # 下一个离散点时刻
             next_discrete_time = min([time for time in discrete_times if time > self.current_time])
+
+            # print("当前时间:", self.current_time, "下一个离散点时刻:", next_discrete_time)
             # 更新当前时间
             self.current_time = next_discrete_time
 
@@ -396,6 +398,7 @@ class WarehouseEnv(gym.Env, Config):
                 if self.current_time == robot.move_to_depot_time:
                     robot.state = 'idle'  # 更新机器人的状态
                     self.orders_uncompleted.remove(robot.order)  # 从未拣选完成的订单列表中移除该订单
+                    self.orders_completed.append(robot.order)  # 完工的订单
                     robot.order.complete_time = self.current_time # 设置订单对象的拣选完成时间
                     robot.order = None  # 重置机器人的订单对象
                     robot.position = self.depot_position  # 更新机器人的位置

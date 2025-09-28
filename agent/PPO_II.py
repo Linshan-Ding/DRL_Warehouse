@@ -16,9 +16,9 @@ import csv
 from environment.class_public import Config
 import random
 
-# 设置训练数据可视化
-viz = Visdom(env='PPO_II')
-viz.line([0], [0], win='reward_II', opts=dict(title='Reward2', xlabel='Episode', ylabel='Reward'))
+# # 设置训练数据可视化
+# viz = Visdom(env='PPO_II')
+# viz.line([0], [0], win='reward_II', opts=dict(title='Reward2', xlabel='Episode', ylabel='Reward'))
 
 # -----------------初始化仓库环境---------------------
 warehouse = WarehouseEnv()
@@ -387,29 +387,29 @@ def get_order_object(poisson_parameter, num_items):
 
 
 # 定义训练函数
-def train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=1000):
+def train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=10):
     total_cost = float('inf')  # 初始化总成本
     train_env = copy.deepcopy(warehouse)  # 训练环境
     test_env = copy.deepcopy(warehouse)  # 测试环境
-    for episode in range(212, num_episodes):
+    for episode in range(num_episodes):
         # ====================训练=============================
         # total_seconds = 31 * 8 * 3600  # 31天
         # generate_orders = GenerateData(warehouse, total_seconds)  # 生成订单数据对象
         # orders = generate_orders.generate_orders()  # 生成一个月内的订单数据
-        poisson_parameter = random.choice([60, 120, 180])  # 随机选择泊松分布参数
-        num_items = random.choice([10, 20, 30])  # 随机选择订单中商品数量
-        orders = get_order_object(poisson_parameter, num_items)  # 读取订单对象
-        state = train_env.reset(orders)  # 重置环境并获取初始状态
-        done = False
-        total_reward = 0
-        while not done:
-            action, log_prob = ppo_agent.select_action(state)
-            next_state, reward, done = train_env.step(action)
-            ppo_agent.store_reward_and_next_state(len(ppo_agent.memory) - 1, reward, done, next_state)
-            state = next_state
-            total_reward += reward
-        # 更新网络
-        ppo_agent.update()
+        # poisson_parameter = random.choice([60, 120, 180])  # 随机选择泊松分布参数
+        # num_items = random.choice([10, 20, 30])  # 随机选择订单中商品数量
+        # orders = get_order_object(poisson_parameter, num_items)  # 读取订单对象
+        # state = train_env.reset(orders)  # 重置环境并获取初始状态
+        # done = False
+        # total_reward = 0
+        # while not done:
+        #     action, log_prob = ppo_agent.select_action(state)
+        #     next_state, reward, done = train_env.step(action)
+        #     ppo_agent.store_reward_and_next_state(len(ppo_agent.memory) - 1, reward, done, next_state)
+        #     state = next_state
+        #     total_reward += reward
+        # # 更新网络
+        # ppo_agent.update()
 
         # ===================测试==============================
         with torch.no_grad():
@@ -424,27 +424,36 @@ def train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=1000):
                 total_reward += reward
 
         print(f"Episode {episode + 1}/{num_episodes}, Total Reward: {total_reward}")
-
-        # 可视化训练数据
-        viz.line([-total_reward], [episode + 1], win='reward_II', update='append')
-
-        # 保存模型
-        if total_cost >= -total_reward:
-            torch.save(ppo_agent.policy.state_dict(), f"policy_network_PPO_II.pth")
-            torch.save(ppo_agent.value_network.state_dict(), f"value_network_PPO_II.pth")
-            total_cost = - total_reward
-
-        # 保存训练数据
-        with open('training_data_PPO_II.csv', 'a', newline='') as f:
+        avg_picking_time = sum([order.complete_time - order.arrive_time for order in test_env.orders_completed]) / len(test_env.orders_completed) if test_env.orders_completed else 0
+        completion_rate = len(test_env.orders_completed) / len(test_env.orders_arrived) if test_env.orders_arrived else 0
+        print("订单平均拣选时间：", avg_picking_time)
+        print("订单完成率：", completion_rate)
+        # 存储三类数据到csv文件
+        with open('instance_data_PPO_II.csv', 'a', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow([episode + 1, total_reward])
+            writer.writerow([episode + 1, total_reward, avg_picking_time, completion_rate])
+
+
+        # # 可视化训练数据
+        # viz.line([-total_reward], [episode + 1], win='reward_II', update='append')
+        #
+        # # 保存模型
+        # if total_cost >= -total_reward:
+        #     torch.save(ppo_agent.policy.state_dict(), f"policy_network_PPO_II.pth")
+        #     torch.save(ppo_agent.value_network.state_dict(), f"value_network_PPO_II.pth")
+        #     total_cost = - total_reward
+        #
+        # # 保存训练数据
+        # with open('training_data_PPO_II.csv', 'a', newline='') as f:
+        #     writer = csv.writer(f)
+        #     writer.writerow([episode + 1, total_reward])
 
 
 if __name__ == "__main__":
     # 订单数据保存和读取位置
     file_order = 'D:/Python project/DRL_Warehouse/data/instances'
-    poisson_parameter = 120  # 测试算例泊松分布参数
-    num_items = 20  # 订单中的商品数量
+    poisson_parameter = 60  # 测试算例泊松分布参数
+    num_items = 30  # 订单中的商品数量
     # 读取一个月内的订单数据，orders.pkl文件中
     with open(file_order + "/orders_{}_{}.pkl".format(poisson_parameter, num_items), "rb") as f:
         orders_test = pickle.load(f)  # 读取订单数据
@@ -464,4 +473,4 @@ if __name__ == "__main__":
     # 初始化PPO代理
     ppo_agent = PPOAgent(policy_network, value_network)
     # 训练PPO代理
-    train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=1000)
+    train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=10)

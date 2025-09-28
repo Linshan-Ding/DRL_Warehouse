@@ -404,14 +404,15 @@ class WarehouseEnv(gym.Env, Config):
                         # 更新机器人移动到depot_position的时间
                         shortest_path_length = self.shortest_path_between_pick_points(robot, self.depot_object)
                         move_time = shortest_path_length / robot.speed
-                        robot.move_to_depot_time = self.current_time + move_time + self.pack_time  # 机器人移动到depot_position的时间
+                        robot.move_to_depot_time = self.current_time + move_time + self.pack_time  # 机器人移动到depot_position并完成打包的时间
 
-            # 5、若当前时间等于机器人移动到depot_position时刻，则更新机器人的状态，重置机器人的订单对象
+            # 5、若当前时间等于机器人移动到depot_position并完成打包的时刻，则更新机器人的状态，重置机器人的订单对象
             for robot in self.robots:
                 # 若机器人移动到depot_position时刻
                 if self.current_time == robot.move_to_depot_time:
                     robot.state = 'idle'  # 更新机器人的状态
                     self.orders_uncompleted.remove(robot.order)  # 从未拣选完成的订单列表中移除该订单
+                    self.orders_completed.append(robot.order)  # 将该订单加入到已完成订单列表中
                     robot.order.complete_time = self.current_time # 设置订单对象的拣选完成时间
                     robot.order = None  # 重置机器人的订单对象
                     robot.position = self.depot_position  # 更新机器人的位置

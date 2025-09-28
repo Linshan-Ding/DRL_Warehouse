@@ -48,9 +48,9 @@ class Config:
                 "robot_speed": 3.0
             },
             "picker": {
-                # 短租拣货员单位时间雇佣成本 元/秒
+                # 短租拣货员单位时间雇佣成本 0.0125元/秒
                 "short_term_unit_time_cost": 360/(3600*8),
-                # 长租拣货员单位时间雇佣成本 元/秒
+                # 长租拣货员单位时间雇佣成本 0.0081元/秒
                 "long_term_unit_time_cost": 7000/(3600*8*30),
                 # 拣货员移动速度 m/s
                 "picker_speed": 0.75,
