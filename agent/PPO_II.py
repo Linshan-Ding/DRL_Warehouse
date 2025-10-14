@@ -424,10 +424,10 @@ def train_ppo_agent(ppo_agent, warehouse, orders_test, num_episodes=10):
                 total_reward += reward
 
         print(f"Episode {episode + 1}/{num_episodes}, Total Reward: {total_reward}")
-        avg_picking_time = sum([order.complete_time - order.arrive_time for order in test_env.orders_completed]) / len(test_env.orders_completed) if test_env.orders_completed else 0
-        completion_rate = len(test_env.orders_completed) / len(test_env.orders_arrived) if test_env.orders_arrived else 0
+        avg_picking_time = sum([order.complete_time - order.arrive_time for order in test_env.orders_completed]) / len(test_env.orders_completed)
+        completion_rate = len([order for order in test_env.orders_completed if order.complete_time <= order.due_time]) / len(test_env.orders_arrived)
         print("订单平均拣选时间：", avg_picking_time)
-        print("订单完成率：", completion_rate)
+        print("订单按时完成率：", completion_rate)
         # 存储三类数据到csv文件
         with open('instance_data_PPO_II.csv', 'a', newline='') as f:
             writer = csv.writer(f)
@@ -453,7 +453,7 @@ if __name__ == "__main__":
     # 订单数据保存和读取位置
     file_order = 'D:/Python project/DRL_Warehouse/data/instances'
     poisson_parameter = 60  # 测试算例泊松分布参数
-    num_items = 30  # 订单中的商品数量
+    num_items = 10  # 订单中的商品数量
     # 读取一个月内的订单数据，orders.pkl文件中
     with open(file_order + "/orders_{}_{}.pkl".format(poisson_parameter, num_items), "rb") as f:
         orders_test = pickle.load(f)  # 读取订单数据
