@@ -65,18 +65,18 @@ if __name__ == "__main__":
     warehouse = WarehouseEnv()
     print('仓库中的商品种类数:', len(warehouse.items))  # 仓库中的商品种类数
     # 一个月的总秒数
-    total_seconds = (8 * 3600) * 31  # 3天
+    total_seconds = (8 * 3600) * 11  # 11天
     # 订单数据保存和读取位置
     file_order = 'D:\\Python project\\DRL_Warehouse\\data'
 
-    poisson_parameter_list = [60, 120, 180] # 泊松分布参数列表
+    poisson_parameter_list = [160] # 泊松分布参数列表
     order_n_items_list = [10, 20, 30] # 订单中的商品数量列表
 
     for poisson_parameter in poisson_parameter_list:
         for order_n_items in order_n_items_list:
             # 生成一个月内的订单数据，并保存到orders.pkl文件中
             generate_orders = GenerateData(warehouse, total_seconds, poisson_parameter, order_n_items)
-            orders = generate_orders.generate_orders()  # 生成一个月内的订单数据
+            orders = generate_orders.generate_orders()  # 生成持续时间内的订单数据
 
     # # 读取一个月内的订单数据，orders.pkl文件中
     # with open(file_order + "\orders_{}.pkl".format(poisson_parameter), "rb") as f:

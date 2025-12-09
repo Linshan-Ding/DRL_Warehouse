@@ -1,8 +1,6 @@
 """
-定义了公共的类
+参数定义类
 """
-import random
-import numpy as np
 
 # -------------参数定义类----------------
 class Config:
@@ -40,12 +38,12 @@ class Config:
                 "depot_position": (18, 0)
             },
             "robot": {
-                # 短租机器人单位运行成本
+                # 短租机器人单位运行成本 0.0038
                 "short_term_unit_run_cost": 110/(3600*8),
-                # 长租机器人单位运行成本
+                # 长租机器人单位运行成本 0.00039
                 "long_term_unit_run_cost": 1000000/(3600*8*30*8*365),
                 # 机器人移动速度 m/s
-                "robot_speed": 3.0
+                "robot_speed": 1.2
             },
             "picker": {
                 # 短租拣货员单位时间雇佣成本 0.0125元/秒
@@ -59,7 +57,7 @@ class Config:
             },
             "order": {
                 # 订单单位延期成本 元/秒
-                "unit_delay_cost": 0.1,  # 元/秒
+                "unit_delay_cost": 0.05,  # 元/秒
                 # 订单打包时间 秒
                 "pack_time": 20,  # 秒
                 # 订单到达率范围 秒/个 相当于泊松分布参数
@@ -77,15 +75,15 @@ class Config:
             },
             "ppo": {
                 # PPO算法参数
-                "gamma": 0.99,  # 折扣因子
+                "gamma": 1,  # 折扣因子
                 "clip_range": 0.2,  # 剪切范围
                 "learning_rate": 3e-4,  # 学习率
-                "n_epochs": 10,  # 每个批次的训练轮数
+                "n_epochs": 3,  # 每个批次的训练轮数
                 "normalize_rewards": True,  # 是否归一化回报
                 "standardize_rewards": True,  # 是否标准化回报
-                "initial_entropy_coeff": 0.2,  # 初始熵系数
-                "min_entropy_coeff": 0.01,  # 最小熵系数
-                "entropy_coeff_decay": 0.999  # 熵衰减率
+                "initial_entropy_coeff": 0.05,  # 初始熵系数
+                "min_entropy_coeff": 0.001,  # 最小熵系数
+                "entropy_coeff_decay": 0.995  # 熵衰减率
             }
         }
 

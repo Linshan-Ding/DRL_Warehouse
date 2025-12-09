@@ -423,8 +423,8 @@ class WarehouseEnv(gym.Env, Config):
                         self.robots_at_depot.remove(robot)  # 从depot_position位置的机器人列表中移除机器人
                         robot.run_end_time = self.current_time  # 设置机器人的运行结束时间
 
-            # 当前离散点状态更新
-            self.state = self.state_extractor()
+        # 当前离散点状态更新
+        self.state = self.state_extractor()
 
         """判断是否结束仿真"""
         if self.current_time >= self.total_time:
@@ -588,11 +588,9 @@ class WarehouseEnv(gym.Env, Config):
 
 if __name__ == "__main__":
     # 基于仓库中的商品创建一个月内的订单对象，每个订单包含多个商品，订单到达时间服从泊松分布，仿真周期设置为一个月
-    # 一个月的总秒数
-    total_seconds = (8 * 3600) * 3  # 3天
-    # 订单到达泊松分布参数
-    poisson_parameter = 120  # 泊松分布参数, 60秒一个订单到达
-    num_items = 20
+    # 总秒数
+    total_seconds = (8 * 3600) * 30  # 30天
+    num_items = 6
 
     # 初始化仓库环境
     warehouse = WarehouseEnv()
@@ -601,13 +599,9 @@ if __name__ == "__main__":
     # 输出商品总数
     print('商品总数：', len(warehouse.items))
 
-    # # 生成一个月内的订单数据，并保存到orders.pkl文件中
-    # generate_orders = GenerateData(warehouse, total_seconds, poisson_parameter)  # 生成订单数据对象
-    # generate_orders.generate_orders()  # 生成一个月内的订单数据
-
     # 订单数据读取
     file_order = 'D:\\Python project\\DRL_Warehouse\\data\\instances'
-    with open(file_order + "\\orders_{}_{}.pkl".format(poisson_parameter, num_items), "rb") as f:
+    with open(file_order + "\\orders_{}.pkl".format(num_items), "rb") as f:
         orders = pickle.load(f)  # 读取订单数据
 
     # 基于上述一个月内的订单数据和仓库环境数据，实现仓库环境的仿真
@@ -626,7 +620,7 @@ if __name__ == "__main__":
             n_picker_area = random.randint(-50, 50)  # 拣货员数量调整值
             action = [n_robot, n_picker_area, n_picker_area, n_picker_area]  # 每个区域的拣货员数量增加1，机器人数量增加1
             # 仓库环境的仿真步进函数
-            state, reward, done = warehouse.step(action)
+            state, reward, done = warehouse.step(action, first_step=(epoch==0 and warehouse.current_time==0))
             total_reward += reward  # 累计奖励
             # 输出当前状态
             # print(f"Current state: {warehouse.state}")
