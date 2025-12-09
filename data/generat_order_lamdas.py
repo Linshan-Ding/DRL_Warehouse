@@ -52,7 +52,7 @@ class GenerateData(Config):
 
         if self.save_data:
             # 将orders信息保存到D:\Python project\DRL_Warehouse\data文件夹中，并在命名中融合self.poisson_parameter信息
-            with open("D:\\Python project\\DRL_Warehouse\\data\\orders_{}.pkl".format(self.order_n_items), "wb") as f:
+            with open("D:\\Python project\\DRL_Warehouse\\data\\instances\\orders_{}.pkl".format(self.order_n_items), "wb") as f:
                 pickle.dump(orders, f)
             print(f"Total number of orders: {len(orders)}")
 
@@ -64,7 +64,7 @@ if __name__ == "__main__":
     warehouse = WarehouseEnv()
     print('仓库中的商品种类数:', len(warehouse.items))  # 仓库中的商品种类数
     # 一个月的总秒数
-    total_seconds = (8 * 3600) * 31  # 31天
+    total_seconds = (8 * 3600) * 30  # 31天
     # 订单数据保存和读取位置
     file_order = 'D:\\Python project\\DRL_Warehouse\\data'
 
