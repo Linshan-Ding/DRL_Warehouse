@@ -23,7 +23,6 @@ viz.line([0], [0], win='ppo1', opts=dict(title='短租模式 (Optimized)', xlabe
 # ==========================================
 # 1. 工具函数与缓冲区 (Utils & Buffer)
 # ==========================================
-
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     """正交初始化：提升深层强化学习网络的收敛速度和稳定性"""
     torch.nn.init.orthogonal_(layer.weight, std)
@@ -424,7 +423,7 @@ def train_ppo_agent(ppo_agent, warehouse, num_episodes=1000):
     for episode in range(num_episodes):
         scenario_idx = episode % len(scenarios)
         current_scenario = scenarios[scenario_idx]
-        current_scenario = 10  # 强制测试场景2，按需修改
+        current_scenario = 10  # 强制测试场景10，按需修改
 
         print(f"Episode {episode + 1}/{num_episodes} - Using scenario: {current_scenario} items")
 
