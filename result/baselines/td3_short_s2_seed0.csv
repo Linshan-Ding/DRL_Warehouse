@@ -1,0 +1,2 @@
+episode,total_cost,delay_cost,robot_cost,picker_cost,completed_orders,on_time_completed_orders,total_orders,average_picking_time,completion_rate,scenario,mode,seed
+1,282251.19245188305,61071.19245188304,19580.0,201600.0,6624,6293,6626,561.5302312947746,0.9497434349532146,2,short,0
