@@ -14,7 +14,9 @@ from common import (
     QNetwork,
     ReplayBuffer,
     add_common_args,
+    best_config_path,
     collect_metrics,
+    collect_resource_config,
     hard_update,
     init_base_env,
     load_orders,
@@ -30,6 +32,7 @@ from common import (
     state_to_arrays,
     state_to_tensors,
     step_env,
+    write_best_config_csv,
 )
 
 
@@ -73,7 +76,7 @@ def main():
     set_seed(args.seed)
     device = torch.device(args.device)
 
-    orders = load_orders(args.scenario)
+    orders = load_orders(args.items, args.month)
     base_env = init_base_env()
     action_dim = base_env.N_a + 1
     scalar_dim = base_env.N_a + 1
@@ -91,6 +94,7 @@ def main():
     buffer = ReplayBuffer(args.buffer_size, matrix_shape, scalar_dim, action_dim)
 
     csv_path, model_path = output_paths(args, "ddpg")
+    best_config_csv_path = best_config_path(args, "ddpg")
     logger = CsvLogger(csv_path)
     viz, win = make_visdom(args, "ddpg")
     best_cost = math.inf
@@ -99,6 +103,7 @@ def main():
     try:
         for episode in range(1, args.episodes + 1):
             env, state = make_episode_env(base_env, orders)
+            episode_config_rows = []
             for decision in range(max_decisions(args.mode, args.max_days)):
                 matrix_np, scalar_np = state_to_arrays(state)
                 if global_step < args.warmup_steps:
@@ -110,8 +115,25 @@ def main():
                     action_norm = np.clip(action_norm + noise, -1, 1).astype(np.float32)
 
                 env_action = normalized_to_env_action(action_norm, args.action_scale)
+                decision_start_time = env.current_time
                 next_state, reward, done = step_env(env, env_action, args.mode, decision)
                 terminal = done or decision == max_decisions(args.mode, args.max_days) - 1
+                decision_metrics = collect_metrics(env, episode, args.items, args.month, args.mode, args.seed)
+                episode_config_rows.append(
+                    collect_resource_config(
+                        env,
+                        episode,
+                        decision,
+                        env_action,
+                        decision_metrics,
+                        "ddpg",
+                        args.items,
+                        args.month,
+                        args.mode,
+                        args.seed,
+                        decision_start_time=decision_start_time,
+                    )
+                )
                 next_matrix_np, next_scalar_np = state_to_arrays(next_state)
                 buffer.add(matrix_np, scalar_np, action_norm, float(reward), next_matrix_np, next_scalar_np, terminal)
 
@@ -133,7 +155,7 @@ def main():
                 if terminal:
                     break
 
-            metrics = collect_metrics(env, episode, args.scenario, args.mode, args.seed)
+            metrics = collect_metrics(env, episode, args.items, args.month, args.mode, args.seed)
             logger.write(metrics)
             viz.line([metrics["total_cost"]], [episode], win=win, update="append")
             print_episode("ddpg", metrics)
@@ -141,6 +163,7 @@ def main():
             if metrics["total_cost"] < best_cost:
                 best_cost = metrics["total_cost"]
                 save_checkpoint(model_path, {"actor": actor, "critic": critic}, vars(args))
+                write_best_config_csv(best_config_csv_path, episode_config_rows)
     finally:
         logger.close()
 

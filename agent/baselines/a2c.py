@@ -12,7 +12,9 @@ from common import (
     CsvLogger,
     ValueNetwork,
     add_common_args,
+    best_config_path,
     collect_metrics,
+    collect_resource_config,
     init_base_env,
     load_orders,
     make_episode_env,
@@ -25,6 +27,7 @@ from common import (
     set_seed,
     state_to_tensors,
     step_env,
+    write_best_config_csv,
 )
 
 
@@ -69,7 +72,7 @@ def main():
     set_seed(args.seed)
     device = torch.device(args.device)
 
-    orders = load_orders(args.scenario)
+    orders = load_orders(args.items, args.month)
     base_env = init_base_env()
     action_dim = base_env.N_a + 1
     scalar_dim = base_env.N_a + 1
@@ -80,6 +83,7 @@ def main():
     mse_loss = nn.MSELoss()
 
     csv_path, model_path = output_paths(args, "a2c")
+    best_config_csv_path = best_config_path(args, "a2c")
     logger = CsvLogger(csv_path)
     viz, win = make_visdom(args, "a2c")
     best_cost = math.inf
@@ -88,6 +92,7 @@ def main():
         for episode in range(1, args.episodes + 1):
             env, state = make_episode_env(base_env, orders)
             log_probs, entropies, values, rewards, dones = [], [], [], [], []
+            episode_config_rows = []
             terminal = False
 
             for decision in range(max_decisions(args.mode, args.max_days)):
@@ -104,8 +109,25 @@ def main():
 
                 action_norm = action_norm_t.detach().cpu().numpy()[0]
                 env_action = normalized_to_env_action(action_norm, args.action_scale)
+                decision_start_time = env.current_time
                 next_state, reward, done = step_env(env, env_action, args.mode, decision)
                 terminal = done or decision == max_decisions(args.mode, args.max_days) - 1
+                decision_metrics = collect_metrics(env, episode, args.items, args.month, args.mode, args.seed)
+                episode_config_rows.append(
+                    collect_resource_config(
+                        env,
+                        episode,
+                        decision,
+                        env_action,
+                        decision_metrics,
+                        "a2c",
+                        args.items,
+                        args.month,
+                        args.mode,
+                        args.seed,
+                        decision_start_time=decision_start_time,
+                    )
+                )
 
                 log_probs.append(log_prob.squeeze(0))
                 entropies.append(entropy.squeeze(0))
@@ -140,7 +162,7 @@ def main():
             nn.utils.clip_grad_norm_(list(actor.parameters()) + list(value_net.parameters()), args.max_grad_norm)
             optimizer.step()
 
-            metrics = collect_metrics(env, episode, args.scenario, args.mode, args.seed)
+            metrics = collect_metrics(env, episode, args.items, args.month, args.mode, args.seed)
             logger.write(metrics)
             viz.line([metrics["total_cost"]], [episode], win=win, update="append")
             print_episode("a2c", metrics)
@@ -148,6 +170,7 @@ def main():
             if metrics["total_cost"] < best_cost:
                 best_cost = metrics["total_cost"]
                 save_checkpoint(model_path, {"actor": actor, "value": value_net}, vars(args))
+                write_best_config_csv(best_config_csv_path, episode_config_rows)
     finally:
         logger.close()
 

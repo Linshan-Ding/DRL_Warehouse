@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import copy
-import csv
-import pickle
-import random
 import sys
+from functools import partial
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Tuple
 
 import numpy as np
 import torch
@@ -18,80 +15,69 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from environment.warehouse_test2 import WarehouseEnv  # noqa: E402
+from agent.training_utils import (  # noqa: E402
+    DEFAULT_PARAMETERS,
+    CsvLogger,
+    best_config_path as _best_config_path,
+    case_stem,
+    collect_resource_config,
+    collect_metrics,
+    init_base_env as _init_base_env,
+    layer_init,
+    load_orders as _load_orders,
+    make_episode_env,
+    make_visdom as _make_visdom,
+    max_decisions,
+    output_paths as _output_paths,
+    print_episode,
+    save_checkpoint,
+    set_seed,
+    step_env,
+    write_best_config_csv,
+)
 
 
 MODES = ("short", "long", "hybrid")
-SCENARIOS = (2, 4, 6, 10)
-CSV_HEADER = [
-    "episode",
-    "total_cost",
-    "delay_cost",
-    "robot_cost",
-    "picker_cost",
-    "completed_orders",
-    "on_time_completed_orders",
-    "total_orders",
-    "average_picking_time",
-    "completion_rate",
-    "scenario",
-    "mode",
-    "seed",
-]
+ITEM_SCENARIOS = tuple(DEFAULT_PARAMETERS["experiment"].get("item_scenarios", [2, 4, 6, 10]))
+MONTHS = tuple(DEFAULT_PARAMETERS["experiment"].get("months", list(range(1, 13))))
 
 
 def add_common_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-    parser.add_argument("--mode", choices=MODES, default="short")
-    parser.add_argument("--scenario", type=int, choices=SCENARIOS, default=2)
-    parser.add_argument("--episodes", type=int, default=3000)
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--output-dir", default="result/baselines")
+    experiment = DEFAULT_PARAMETERS["experiment"]
+    paths = DEFAULT_PARAMETERS["paths"]
+    parser.add_argument("--mode", choices=MODES, default=experiment.get("mode", "short"))
+    parser.add_argument("--items", type=int, choices=ITEM_SCENARIOS, default=experiment.get("item_scenario", 2))
+    parser.add_argument("--month", type=int, choices=MONTHS, default=experiment.get("month", 1))
+    parser.add_argument("--episodes", type=int, default=experiment.get("episodes", 3000))
+    parser.add_argument("--seed", type=int, default=experiment.get("seed", 0))
+    parser.add_argument("--output-dir", default=paths.get("baseline_output_dir", "result/baselines"))
     parser.add_argument("--visdom", action="store_true")
-    parser.add_argument("--action-scale", type=int, default=5)
-    parser.add_argument("--max-days", type=int, default=30)
+    parser.add_argument("--action-scale", type=int, default=experiment.get("action_scale", 5))
+    parser.add_argument("--max-days", type=int, default=experiment.get("max_days", 30))
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     return parser
 
 
-def set_seed(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+def output_paths(args: argparse.Namespace, algorithm: str) -> tuple[Path, Path]:
+    stem = f"{algorithm}_{case_stem(args.mode, args.items, args.month, args.seed)}"
+    return _output_paths(args.output_dir, stem)
 
 
-def resolve_output_dir(output_dir: str) -> Path:
-    path = Path(output_dir)
-    if not path.is_absolute():
-        path = REPO_ROOT / path
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+def best_config_path(args: argparse.Namespace, algorithm: str) -> Path:
+    stem = f"{algorithm}_{case_stem(args.mode, args.items, args.month, args.seed)}"
+    return _best_config_path(args.output_dir, stem)
 
 
-def output_paths(args: argparse.Namespace, algorithm: str) -> Tuple[Path, Path]:
-    output_dir = resolve_output_dir(args.output_dir)
-    stem = f"{algorithm}_{args.mode}_s{args.scenario}_seed{args.seed}"
-    return output_dir / f"{stem}.csv", output_dir / f"{stem}.pth"
+load_orders = partial(_load_orders, DEFAULT_PARAMETERS)
+init_base_env = partial(_init_base_env, DEFAULT_PARAMETERS)
 
 
-def load_orders(scenario: int):
-    path = REPO_ROOT / "data" / "instances" / f"orders_{scenario}.pkl"
-    if not path.exists():
-        raise FileNotFoundError(
-            f"Order file not found: {path}. Generate it first or choose an existing scenario."
-        )
-    with path.open("rb") as f:
-        return pickle.load(f)
+def make_visdom(args: argparse.Namespace, algorithm: str):
+    win = f"{algorithm}_{case_stem(args.mode, args.items, args.month, args.seed)}"
+    return _make_visdom(args.visdom, "DRL_Baselines", win)
 
 
-def init_base_env() -> WarehouseEnv:
-    env = WarehouseEnv()
-    env.total_time = 8 * 3600 * 30
-    return env
-
-
-def state_to_arrays(state: Dict) -> Tuple[np.ndarray, np.ndarray]:
+def state_to_arrays(state: dict) -> tuple[np.ndarray, np.ndarray]:
     matrix = np.stack(
         [
             state["robot_queue_list"],
@@ -104,7 +90,7 @@ def state_to_arrays(state: Dict) -> Tuple[np.ndarray, np.ndarray]:
     return matrix, scalar
 
 
-def state_to_tensors(state: Dict, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
+def state_to_tensors(state: dict, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
     matrix, scalar = state_to_arrays(state)
     return (
         torch.as_tensor(matrix, dtype=torch.float32, device=device).unsqueeze(0),
@@ -116,108 +102,6 @@ def normalized_to_env_action(action: np.ndarray, action_scale: int) -> np.ndarra
     clipped = np.clip(np.asarray(action, dtype=np.float32), -1.0, 1.0)
     scaled = np.rint(clipped * action_scale)
     return np.clip(scaled, -action_scale, action_scale).astype(np.float32)
-
-
-def max_decisions(mode: str, max_days: int) -> int:
-    return 1 if mode == "long" else max_days
-
-
-def step_env(env: WarehouseEnv, action: np.ndarray, mode: str, decision_index: int):
-    if mode == "long":
-        return env.step(action, first_step=True, pattern="long")
-    if mode == "hybrid":
-        return env.step(action, first_step=(decision_index == 0))
-    return env.step(action)
-
-
-def make_episode_env(base_env: WarehouseEnv, orders):
-    env = copy.deepcopy(base_env)
-    state = env.reset(copy.deepcopy(orders))
-    return env, state
-
-
-def collect_metrics(env: WarehouseEnv, episode: int, scenario: int, mode: str, seed: int) -> Dict:
-    delay_cost = sum(order.total_delay_cost(env.current_time) for order in env.orders_arrived)
-    robot_cost = sum(robot.total_run_cost(env.current_time) for robot in env.robots_added)
-    picker_cost = sum(picker.total_hire_cost(env.current_time) for picker in env.pickers_added)
-    total_cost = delay_cost + robot_cost + picker_cost
-
-    completed_orders = env.orders_completed
-    completed_count = len(completed_orders)
-    total_orders = len(env.orders_arrived)
-    on_time = len([order for order in completed_orders if order.complete_time <= order.due_time])
-    avg_picking_time = 0.0
-    if completed_count > 0:
-        avg_picking_time = sum(
-            order.complete_time - order.arrive_time for order in completed_orders
-        ) / completed_count
-    completion_rate = on_time / total_orders if total_orders > 0 else 0.0
-
-    return {
-        "episode": episode,
-        "total_cost": total_cost,
-        "delay_cost": delay_cost,
-        "robot_cost": robot_cost,
-        "picker_cost": picker_cost,
-        "completed_orders": completed_count,
-        "on_time_completed_orders": on_time,
-        "total_orders": total_orders,
-        "average_picking_time": avg_picking_time,
-        "completion_rate": completion_rate,
-        "scenario": scenario,
-        "mode": mode,
-        "seed": seed,
-    }
-
-
-def metrics_row(metrics: Dict) -> List:
-    return [metrics[key] for key in CSV_HEADER]
-
-
-class CsvLogger:
-    def __init__(self, path: Path):
-        self.path = path
-        self.file = path.open("w", newline="", encoding="utf-8")
-        self.writer = csv.writer(self.file)
-        self.writer.writerow(CSV_HEADER)
-
-    def write(self, metrics: Dict) -> None:
-        self.writer.writerow(metrics_row(metrics))
-        self.file.flush()
-
-    def close(self) -> None:
-        self.file.close()
-
-
-class NullViz:
-    def line(self, *args, **kwargs):
-        return None
-
-
-def make_visdom(args: argparse.Namespace, algorithm: str):
-    if not args.visdom:
-        return NullViz(), f"{algorithm}_{args.mode}"
-    try:
-        from visdom import Visdom
-
-        viz = Visdom(env="DRL_Baselines")
-        win = f"{algorithm}_{args.mode}_s{args.scenario}_seed{args.seed}"
-        viz.line(
-            [0],
-            [0],
-            win=win,
-            opts=dict(title=win, xlabel="Episode", ylabel="Total Cost"),
-        )
-        return viz, win
-    except Exception as exc:  # Visdom should never stop training.
-        print(f"Visdom disabled: {exc}")
-        return NullViz(), f"{algorithm}_{args.mode}"
-
-
-def layer_init(layer: nn.Module, std: float = np.sqrt(2), bias_const: float = 0.0):
-    nn.init.orthogonal_(layer.weight, std)
-    nn.init.constant_(layer.bias, bias_const)
-    return layer
 
 
 class StateEncoder(nn.Module):
@@ -391,19 +275,3 @@ def soft_update(source: nn.Module, target: nn.Module, tau: float) -> None:
 
 def hard_update(source: nn.Module, target: nn.Module) -> None:
     target.load_state_dict(source.state_dict())
-
-
-def save_checkpoint(path: Path, modules: Dict[str, nn.Module], extra: Dict | None = None) -> None:
-    checkpoint = {name: module.state_dict() for name, module in modules.items()}
-    if extra:
-        checkpoint["extra"] = extra
-    torch.save(checkpoint, path)
-
-
-def print_episode(algorithm: str, metrics: Dict) -> None:
-    print(
-        f"{algorithm.upper()} episode {metrics['episode']}: "
-        f"cost={metrics['total_cost']:.2f}, "
-        f"orders={metrics['completed_orders']}/{metrics['total_orders']}, "
-        f"rate={metrics['completion_rate']:.4f}"
-    )
