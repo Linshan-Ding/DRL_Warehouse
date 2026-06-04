@@ -17,9 +17,13 @@ class PolicyNetwork(nn.Module):
         output_dim: int = 4,
         feature_dim: int = 32,
         attention_heads: int = 4,
-        initial_log_std: float = 1.5,
+        initial_log_std: float = 0.5,
+        min_log_std: float = -1.0,
+        max_log_std: float = 1.0,
     ):
         super().__init__()
+        self.min_log_std = min_log_std
+        self.max_log_std = max_log_std
         self.cnn = nn.Sequential(
             layer_init(nn.Conv2d(input_channels, 16, kernel_size=3, stride=1, padding=1)),
             nn.ReLU(),
@@ -50,7 +54,12 @@ class PolicyNetwork(nn.Module):
         )
         self.attn_norm = nn.LayerNorm(hidden_dim)
         self.action_mean = layer_init(nn.Linear(hidden_dim, output_dim), std=0.01)
+        initial_log_std = max(min(initial_log_std, max_log_std), min_log_std)
         self.action_log_std = nn.Parameter(torch.ones(output_dim) * initial_log_std)
+
+    def clamp_action_log_std_(self) -> None:
+        with torch.no_grad():
+            self.action_log_std.clamp_(self.min_log_std, self.max_log_std)
 
     def forward(self, matrix_inputs: torch.Tensor, scalar_inputs: torch.Tensor):
         cnn_feat = self.cnn(matrix_inputs)
@@ -60,7 +69,8 @@ class PolicyNetwork(nn.Module):
         attn_out, _ = self.self_attn(attn_input, attn_input, attn_input)
         hidden = self.attn_norm(hidden + attn_out.squeeze(1))
         mean = self.action_mean(hidden)
-        std = self.action_log_std.expand_as(mean).exp()
+        log_std = self.action_log_std.clamp(self.min_log_std, self.max_log_std)
+        std = log_std.expand_as(mean).exp()
         return mean, std
 
 

@@ -38,7 +38,7 @@ from environment.warehouse_env import WarehouseEnv
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train unified PPO agents for DRL_Warehouse.")
     parser.add_argument("--config", default=None)
-    parser.add_argument("--mode", choices=MODES, default='long')
+    parser.add_argument("--mode", choices=MODES, default='hybrid')
     parser.add_argument("--items", type=int, default=2)
     parser.add_argument("--month", type=int, default=9)
     parser.add_argument("--episodes", type=int, default=None)
@@ -80,7 +80,9 @@ def make_networks(env: WarehouseEnv, parameters: dict[str, Any]):
         hidden_dim=ppo.get("hidden_dim", 128),
         feature_dim=ppo.get("feature_dim", 32),
         attention_heads=ppo.get("attention_heads", 4),
-        initial_log_std=ppo.get("initial_log_std", 1.5),
+        initial_log_std=ppo.get("initial_log_std", 0.5),
+        min_log_std=ppo.get("min_log_std", -1.0),
+        max_log_std=ppo.get("max_log_std", 1.0),
     )
     value = ValueNetwork(
         input_height=env.N_w,
@@ -90,6 +92,35 @@ def make_networks(env: WarehouseEnv, parameters: dict[str, Any]):
         feature_dim=ppo.get("feature_dim", 32),
     )
     return policy, value
+
+
+def _done_for_update(mode: str, done: bool) -> bool:
+    return True if mode == "long" else done
+
+
+def _should_update(
+    mode: str,
+    buffer_len: int,
+    batch_size: int,
+    episode: int,
+    total_episodes: int,
+) -> bool:
+    if mode != "long":
+        return True
+    return buffer_len >= batch_size
+
+
+def _format_update_diagnostics(episode: int, stats: dict[str, float]) -> str:
+    return (
+        f"PPO update episode {episode}: "
+        f"mean_reward={stats['mean_reward']:.4f}, "
+        f"std_reward={stats['std_reward']:.4f}, "
+        f"mean_return={stats['mean_return']:.4f}, "
+        f"policy_loss={stats['policy_loss']:.4f}, "
+        f"value_loss={stats['value_loss']:.4f}, "
+        f"entropy={stats['entropy']:.4f}, "
+        f"mean_action_std={stats['mean_action_std']:.4f}"
+    )
 
 
 def train(parameters: dict[str, Any]) -> Path:
@@ -118,12 +149,15 @@ def train(parameters: dict[str, Any]) -> Path:
     )
 
     best_cost = float("inf")
+    if mode == "long":
+        agent.buffer.clear()
     with csv_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(CSV_HEADER)
         for episode in range(1, episodes + 1):
             env, state = make_episode_env(base_env, orders)
-            agent.buffer.clear()
+            if mode != "long":
+                agent.buffer.clear()
             done = False
             episode_config_rows = []
 
@@ -133,7 +167,16 @@ def train(parameters: dict[str, Any]) -> Path:
                 action, log_prob, value_estimate, matrix_state, scalar_state = agent.select_action(state)
                 decision_start_time = env.current_time
                 next_state, reward, done = step_env(env, action, mode, decision)
-                agent.buffer.add(matrix_state, scalar_state, action, log_prob, reward, done, value_estimate)
+                agent.buffer.add(
+                    matrix_state,
+                    scalar_state,
+                    action,
+                    log_prob,
+                    reward,
+                    _done_for_update(mode, done),
+                    value_estimate,
+                    maxlen=agent.batch_size if mode == "long" else None,
+                )
                 decision_metrics = collect_metrics(env, episode, item_count, month, mode, seed)
                 episode_config_rows.append(
                     collect_resource_config(
@@ -152,11 +195,15 @@ def train(parameters: dict[str, Any]) -> Path:
                 )
                 state = next_state
 
-            agent.update()
+            updated = False
+            if _should_update(mode, len(agent.buffer), agent.batch_size, episode, episodes):
+                updated = agent.update(clear_buffer=(mode != "long"))
             metrics = collect_metrics(env, episode, item_count, month, mode, seed)
             writer.writerow([metrics[key] for key in CSV_HEADER])
             f.flush()
             viz.line([metrics["total_cost"]], [episode], win=viz_win, update="append")
+            if updated and agent.last_update_stats:
+                print(_format_update_diagnostics(episode, agent.last_update_stats))
 
             if metrics["total_cost"] < best_cost:
                 best_cost = metrics["total_cost"]
