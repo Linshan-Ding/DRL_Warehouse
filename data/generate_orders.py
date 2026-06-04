@@ -9,7 +9,7 @@ from typing import Iterable, Sequence
 
 import numpy as np
 
-from environment.class_public import Config, REPO_ROOT
+from environment.class_public import Config, REPO_ROOT, print_config_source
 from environment.class_warehouse import Order
 from environment.warehouse_env import WarehouseEnv
 
@@ -99,9 +99,8 @@ class GenerateData(Config):
         total_seconds: int,
         poisson_parameters: Sequence[float] | None = None,
         order_n_items: int | None = None,
-        config_path: str | None = None,
     ):
-        super().__init__(config_path=config_path)
+        super().__init__()
         self.parameter = self.parameters["order"]
         self.warehouse = warehouse
         self.total_seconds = total_seconds
@@ -162,25 +161,7 @@ def validate_choices(values: Iterable[int], allowed: Iterable[int], label: str) 
 
 
 def build_parser() -> argparse.ArgumentParser:
-    defaults = Config().parameters
     parser = argparse.ArgumentParser(description="Generate monthly order instances for DRL_Warehouse.")
-    parser.add_argument("--config", default=None, help="Path to a JSON config file.")
-    parser.add_argument(
-        "--items",
-        nargs="+",
-        type=int,
-        default=ORDER_N_ITEMS_LIST,
-        help="Order item-count scenario groups. Defaults to 2 4 6 10.",
-    )
-    parser.add_argument(
-        "--months",
-        nargs="+",
-        type=int,
-        default=sorted(MONTH_PARAMS),
-        help="Monthly scenario ids to generate. Defaults to 1 2 ... 12.",
-    )
-    parser.add_argument("--output-dir", default=defaults["paths"]["instance_dir"])
-    parser.add_argument("--seed", type=int, default=defaults["experiment"]["seed"])
     return parser
 
 
@@ -194,15 +175,17 @@ def save_orders(output_dir: Path, item_count: int, month: int, orders) -> Path:
     return output_path
 
 
-def generate_cases(args: argparse.Namespace, config: dict, warehouse: WarehouseEnv, output_dir: Path) -> None:
-    item_counts = validate_choices(args.items, ORDER_N_ITEMS_LIST, "item count")
-    months = validate_choices(args.months, MONTH_PARAMS, "month")
+def generate_cases(config: dict, warehouse: WarehouseEnv, output_dir: Path) -> None:
+    experiment = config["experiment"]
+    item_counts = validate_choices(experiment["item_scenarios"], ORDER_N_ITEMS_LIST, "item count")
+    months = validate_choices(experiment["months"], MONTH_PARAMS, "month")
     work_seconds_per_day = int(config["experiment"]["work_seconds_per_day"])
+    seed = int(experiment["seed"])
 
     for item_count in item_counts:
         for month in months:
-            random.seed(args.seed + item_count * 100 + month - 1)
-            np.random.seed(args.seed + item_count * 100 + month - 1)
+            random.seed(seed + item_count * 100 + month - 1)
+            np.random.seed(seed + item_count * 100 + month - 1)
 
             poisson_parameters = MONTH_PARAMS[month]
             total_seconds = work_seconds_per_day * len(poisson_parameters)
@@ -211,20 +194,20 @@ def generate_cases(args: argparse.Namespace, config: dict, warehouse: WarehouseE
                 total_seconds,
                 poisson_parameters=poisson_parameters,
                 order_n_items=item_count,
-                config_path=args.config,
             )
             orders = generator.generate_orders()
             save_orders(output_dir, item_count, month, orders)
 
 
 def main() -> None:
-    args = build_parser().parse_args()
-    config = Config(config_path=args.config).parameters
-    output_dir = repo_path(args.output_dir)
+    build_parser().parse_args()
+    print_config_source()
+    config = Config().parameters
+    output_dir = repo_path(config["paths"]["instance_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
 
     warehouse = WarehouseEnv()
-    generate_cases(args, config, warehouse, output_dir)
+    generate_cases(config, warehouse, output_dir)
 
 
 if __name__ == "__main__":

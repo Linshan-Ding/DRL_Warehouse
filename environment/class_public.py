@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import copy
 import json
-import os
 from pathlib import Path
 from typing import Any, Mapping
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG_PATH = REPO_ROOT / "configs" / "default.json"
-CONFIG_ENV_VAR = "DRL_WAREHOUSE_CONFIG"
 
 REQUIRED_SECTIONS = (
     "warehouse",
@@ -24,25 +22,16 @@ REQUIRED_SECTIONS = (
 _CONFIG_CACHE: dict[str, dict[str, Any]] = {}
 
 
-def resolve_config_path(config_path: str | os.PathLike[str] | None = None) -> Path:
-    raw_path = config_path or os.environ.get(CONFIG_ENV_VAR) or DEFAULT_CONFIG_PATH
-    path = Path(raw_path)
-    if not path.is_absolute():
-        path = REPO_ROOT / path
-    return path
+def resolve_config_path() -> Path:
+    return DEFAULT_CONFIG_PATH
 
 
-def deep_update(base: dict[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:
-    for key, value in overrides.items():
-        if isinstance(value, Mapping) and isinstance(base.get(key), dict):
-            deep_update(base[key], value)
-        else:
-            base[key] = value
-    return base
+def print_config_source() -> None:
+    print(f"Using config: {DEFAULT_CONFIG_PATH}")
 
 
 def _as_tuple(parameters: dict[str, Any], section: str, key: str) -> None:
-    value = parameters.get(section, {}).get(key)
+    value = parameters[section][key]
     if isinstance(value, list):
         parameters[section][key] = tuple(value)
 
@@ -66,19 +55,40 @@ def validate_config(parameters: Mapping[str, Any]) -> None:
             raise ValueError(f"warehouse.{key} must be positive")
 
     experiment = parameters["experiment"]
+    mode = experiment["mode"]
+    valid_modes = ("short", "long", "hybrid", "fixed_hybrid")
+    if mode is not None and mode not in valid_modes:
+        raise ValueError(f"experiment.mode must be one of: {', '.join(valid_modes)}")
     if int(experiment["episodes"]) <= 0:
         raise ValueError("experiment.episodes must be positive")
     if int(experiment["max_days"]) <= 0:
         raise ValueError("experiment.max_days must be positive")
+    if mode == "fixed_hybrid" and int(experiment["max_days"]) < 2:
+        raise ValueError("fixed_hybrid mode requires experiment.max_days >= 2")
+
+    fixed_hybrid = experiment["fixed_hybrid"]
+
+    if int(fixed_hybrid["long_term_robots"]) < 1:
+        raise ValueError("experiment.fixed_hybrid.long_term_robots must be at least 1")
+
+    picker_counts = fixed_hybrid["long_term_pickers_area"]
+    if not isinstance(picker_counts, list):
+        raise ValueError("experiment.fixed_hybrid.long_term_pickers_area must be a list")
+    if len(picker_counts) != int(warehouse["area_num"]):
+        raise ValueError(
+            "experiment.fixed_hybrid.long_term_pickers_area length must equal "
+            "warehouse.area_num"
+        )
+    if any(int(count) < 1 for count in picker_counts):
+        raise ValueError(
+            "experiment.fixed_hybrid.long_term_pickers_area values must be at least 1"
+        )
 
 
-def load_config(
-    config_path: str | os.PathLike[str] | None = None,
-    overrides: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    path = resolve_config_path(config_path)
+def load_config() -> dict[str, Any]:
+    path = resolve_config_path()
     cache_key = str(path.resolve())
-    if overrides is None and cache_key in _CONFIG_CACHE:
+    if cache_key in _CONFIG_CACHE:
         return copy.deepcopy(_CONFIG_CACHE[cache_key])
 
     if not path.exists():
@@ -87,24 +97,16 @@ def load_config(
     with path.open("r", encoding="utf-8") as f:
         parameters = json.load(f)
 
-    if overrides:
-        parameters = deep_update(parameters, dict(overrides))
-
     parameters = _normalize(parameters)
     validate_config(parameters)
-    if overrides is None:
-        _CONFIG_CACHE[cache_key] = copy.deepcopy(parameters)
+    _CONFIG_CACHE[cache_key] = copy.deepcopy(parameters)
     return parameters
 
 
 class Config:
-    def __init__(
-        self,
-        config_path: str | os.PathLike[str] | None = None,
-        overrides: Mapping[str, Any] | None = None,
-    ):
-        self.config_path = resolve_config_path(config_path)
-        self.parameters = load_config(self.config_path, overrides)
+    def __init__(self):
+        self.config_path = resolve_config_path()
+        self.parameters = load_config()
 
     def parameter(self) -> dict[str, Any]:
         return copy.deepcopy(self.parameters)

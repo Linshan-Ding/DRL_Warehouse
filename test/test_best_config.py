@@ -98,6 +98,69 @@ class BestConfigTest(unittest.TestCase):
         path = best_config_path("result/ppo", "short_i2_m01_seed0")
         self.assertEqual(path.name, "short_i2_m01_seed0_best_config.csv")
 
+    def test_collect_resource_config_records_fixed_hybrid_initialization(self):
+        robots = [
+            SimpleNamespace(remove=False, rent="long"),
+            SimpleNamespace(remove=False, rent="long"),
+        ]
+        pickers_area = {
+            "area1": [SimpleNamespace(remove=False, rent="long")],
+            "area2": [
+                SimpleNamespace(remove=False, rent="long"),
+                SimpleNamespace(remove=False, rent="long"),
+            ],
+            "area3": [
+                SimpleNamespace(remove=False, rent="long"),
+                SimpleNamespace(remove=False, rent="long"),
+                SimpleNamespace(remove=False, rent="long"),
+            ],
+        }
+        env = SimpleNamespace(
+            area_ids=["area1", "area2", "area3"],
+            robots=robots,
+            pickers=[picker for pickers in pickers_area.values() for picker in pickers],
+            pickers_area=pickers_area,
+            adjust_robots=2,
+            adjust_pickers_dict={"area1": 1, "area2": 2, "area3": 3},
+            current_time=28800,
+        )
+        metrics = {
+            "total_cost": 10,
+            "delay_cost": 1,
+            "robot_cost": 2,
+            "picker_cost": 7,
+            "completed_orders": 3,
+            "on_time_completed_orders": 2,
+            "total_orders": 4,
+            "completion_rate": 0.5,
+            "average_picking_time": 12.5,
+        }
+
+        row = collect_resource_config(
+            env,
+            5,
+            0,
+            [2, 1, 2, 3],
+            metrics,
+            "ppo",
+            2,
+            1,
+            "fixed_hybrid",
+            0,
+            decision_start_time=0,
+        )
+
+        self.assertEqual(row["mode"], "fixed_hybrid")
+        self.assertEqual(row["decision_index"], 0)
+        self.assertEqual(row["n_robots_long"], 2)
+        self.assertEqual(row["n_robots_short"], 0)
+        self.assertEqual(row["n_pickers_long_area1"], 1)
+        self.assertEqual(row["n_pickers_long_area2"], 2)
+        self.assertEqual(row["n_pickers_long_area3"], 3)
+        self.assertEqual(row["n_pickers_short_area1"], 0)
+        self.assertEqual(row["n_pickers_short_area2"], 0)
+        self.assertEqual(row["n_pickers_short_area3"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -19,6 +19,7 @@ from common import (
     collect_resource_config,
     hard_update,
     init_base_env,
+    initialize_episode_resources,
     load_orders,
     make_episode_env,
     make_visdom,
@@ -26,6 +27,7 @@ from common import (
     normalized_to_env_action,
     output_paths,
     print_episode,
+    print_config_source,
     save_checkpoint,
     set_seed,
     soft_update,
@@ -73,11 +75,13 @@ def update_ddpg(actor, actor_target, critic, critic_target, actor_optimizer, cri
 
 def main():
     args = build_parser().parse_args()
+    print_config_source()
     set_seed(args.seed)
     device = torch.device(args.device)
 
     orders = load_orders(args.items, args.month)
     base_env = init_base_env()
+    decision_limit = max_decisions(args.mode, args.max_days)
     action_dim = base_env.N_a + 1
     scalar_dim = base_env.N_a + 1
     matrix_shape = (3, base_env.N_w, base_env.N_l)
@@ -103,8 +107,18 @@ def main():
     try:
         for episode in range(1, args.episodes + 1):
             env, state = make_episode_env(base_env, orders)
-            episode_config_rows = []
-            for decision in range(max_decisions(args.mode, args.max_days)):
+            state, done, first_decision_index, episode_config_rows = initialize_episode_resources(
+                env,
+                args.mode,
+                episode,
+                args.items,
+                args.month,
+                args.seed,
+                "ddpg",
+            )
+            for decision in range(first_decision_index, decision_limit):
+                if done:
+                    break
                 matrix_np, scalar_np = state_to_arrays(state)
                 if global_step < args.warmup_steps:
                     action_norm = np.random.uniform(-1, 1, size=action_dim).astype(np.float32)
@@ -117,7 +131,7 @@ def main():
                 env_action = normalized_to_env_action(action_norm, args.action_scale)
                 decision_start_time = env.current_time
                 next_state, reward, done = step_env(env, env_action, args.mode, decision)
-                terminal = done or decision == max_decisions(args.mode, args.max_days) - 1
+                terminal = done or decision == decision_limit - 1
                 decision_metrics = collect_metrics(env, episode, args.items, args.month, args.mode, args.seed)
                 episode_config_rows.append(
                     collect_resource_config(

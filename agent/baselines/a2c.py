@@ -16,6 +16,7 @@ from common import (
     collect_metrics,
     collect_resource_config,
     init_base_env,
+    initialize_episode_resources,
     load_orders,
     make_episode_env,
     make_visdom,
@@ -23,6 +24,7 @@ from common import (
     normalized_to_env_action,
     output_paths,
     print_episode,
+    print_config_source,
     save_checkpoint,
     set_seed,
     state_to_tensors,
@@ -69,11 +71,13 @@ def compute_gae(rewards, dones, values, next_value, gamma, gae_lambda, device):
 
 def main():
     args = build_parser().parse_args()
+    print_config_source()
     set_seed(args.seed)
     device = torch.device(args.device)
 
     orders = load_orders(args.items, args.month)
     base_env = init_base_env()
+    decision_limit = max_decisions(args.mode, args.max_days)
     action_dim = base_env.N_a + 1
     scalar_dim = base_env.N_a + 1
 
@@ -92,10 +96,20 @@ def main():
         for episode in range(1, args.episodes + 1):
             env, state = make_episode_env(base_env, orders)
             log_probs, entropies, values, rewards, dones = [], [], [], [], []
-            episode_config_rows = []
-            terminal = False
+            state, done, first_decision_index, episode_config_rows = initialize_episode_resources(
+                env,
+                args.mode,
+                episode,
+                args.items,
+                args.month,
+                args.seed,
+                "a2c",
+            )
+            terminal = done
 
-            for decision in range(max_decisions(args.mode, args.max_days)):
+            for decision in range(first_decision_index, decision_limit):
+                if terminal:
+                    break
                 matrix, scalar = state_to_tensors(state, device)
                 mean, std = actor(matrix, scalar)
                 dist = torch.distributions.Normal(mean, std)
@@ -111,7 +125,7 @@ def main():
                 env_action = normalized_to_env_action(action_norm, args.action_scale)
                 decision_start_time = env.current_time
                 next_state, reward, done = step_env(env, env_action, args.mode, decision)
-                terminal = done or decision == max_decisions(args.mode, args.max_days) - 1
+                terminal = done or decision == decision_limit - 1
                 decision_metrics = collect_metrics(env, episode, args.items, args.month, args.mode, args.seed)
                 episode_config_rows.append(
                     collect_resource_config(
@@ -138,29 +152,30 @@ def main():
                 if terminal:
                     break
 
-            with torch.no_grad():
-                if terminal:
-                    next_value = torch.zeros(1, device=device)
-                else:
-                    matrix, scalar = state_to_tensors(state, device)
-                    next_value = value_net(matrix, scalar).squeeze(-1)
+            if rewards:
+                with torch.no_grad():
+                    if terminal:
+                        next_value = torch.zeros(1, device=device)
+                    else:
+                        matrix, scalar = state_to_tensors(state, device)
+                        next_value = value_net(matrix, scalar).squeeze(-1)
 
-            values_t = torch.stack(values)
-            log_probs_t = torch.stack(log_probs)
-            entropies_t = torch.stack(entropies)
-            advantages, returns = compute_gae(
-                rewards, dones, values_t, next_value, args.gamma, args.gae_lambda, device
-            )
+                values_t = torch.stack(values)
+                log_probs_t = torch.stack(log_probs)
+                entropies_t = torch.stack(entropies)
+                advantages, returns = compute_gae(
+                    rewards, dones, values_t, next_value, args.gamma, args.gae_lambda, device
+                )
 
-            policy_loss = -(log_probs_t * advantages.detach()).mean()
-            value_loss = mse_loss(values_t, returns.detach())
-            entropy_loss = -entropies_t.mean()
-            loss = policy_loss + args.value_coef * value_loss + args.entropy_coef * entropy_loss
+                policy_loss = -(log_probs_t * advantages.detach()).mean()
+                value_loss = mse_loss(values_t, returns.detach())
+                entropy_loss = -entropies_t.mean()
+                loss = policy_loss + args.value_coef * value_loss + args.entropy_coef * entropy_loss
 
-            optimizer.zero_grad()
-            loss.backward()
-            nn.utils.clip_grad_norm_(list(actor.parameters()) + list(value_net.parameters()), args.max_grad_norm)
-            optimizer.step()
+                optimizer.zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(list(actor.parameters()) + list(value_net.parameters()), args.max_grad_norm)
+                optimizer.step()
 
             metrics = collect_metrics(env, episode, args.items, args.month, args.mode, args.seed)
             logger.write(metrics)

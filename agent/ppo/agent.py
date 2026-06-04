@@ -19,7 +19,7 @@ class PPOAgent(Config):
         if parameters is not None:
             self.parameters = parameters
 
-        configured_device = device or self.parameters["experiment"].get("device", "auto")
+        configured_device = device or self.parameters["experiment"]["device"]
         if configured_device == "auto":
             configured_device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = torch.device(configured_device)
@@ -39,15 +39,15 @@ class PPOAgent(Config):
         self.gamma = ppo["gamma"]
         self.eps_clip = ppo["clip_range"]
         self.k_epochs = ppo["n_epochs"]
-        self.gae_lambda = ppo.get("gae_lambda", 0.95)
-        self.batch_size = ppo.get("batch_size", 64)
-        self.ent_coef = ppo.get("initial_entropy_coeff", 0.05)
-        self.ent_coef_decay = ppo.get("entropy_coeff_decay", 0.995)
-        self.min_ent_coef = ppo.get("min_entropy_coeff", 0.001)
-        self.max_grad_norm = ppo.get("max_grad_norm", 0.5)
-        self.value_loss_coeff = ppo.get("value_loss_coeff", 0.5)
-        self.normalize_rewards = ppo.get("normalize_rewards", False)
-        self.standardize_rewards = ppo.get("standardize_rewards", False)
+        self.gae_lambda = ppo["gae_lambda"]
+        self.batch_size = ppo["batch_size"]
+        self.ent_coef = ppo["initial_entropy_coeff"]
+        self.ent_coef_decay = ppo["entropy_coeff_decay"]
+        self.min_ent_coef = ppo["min_entropy_coeff"]
+        self.max_grad_norm = ppo["max_grad_norm"]
+        self.value_loss_coeff = ppo["value_loss_coeff"]
+        self.normalize_rewards = ppo["normalize_rewards"]
+        self.standardize_rewards = ppo["standardize_rewards"]
         self.mse_loss = nn.MSELoss()
         self.buffer = RolloutBuffer()
         self.last_update_stats = {}
@@ -61,7 +61,7 @@ class PPOAgent(Config):
             * int(warehouse["shelf_capacity"]),
         )
         pick_points_per_area = max(1, int(warehouse["aisle_num"]) * int(warehouse["shelf_capacity"]))
-        max_order_items = max(1, int(max(order.get("order_n_items", [1, 1]))))
+        max_order_items = max(1, int(max(order["order_n_items"])))
         self.matrix_input_scale = torch.as_tensor(
             [pick_points_total, 1.0, max_order_items],
             dtype=torch.float32,

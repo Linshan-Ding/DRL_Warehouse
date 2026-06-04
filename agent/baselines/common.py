@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from environment.class_public import print_config_source  # noqa: E402
 from agent.training_utils import (  # noqa: E402
     DEFAULT_PARAMETERS,
     CsvLogger,
@@ -23,6 +24,7 @@ from agent.training_utils import (  # noqa: E402
     collect_resource_config,
     collect_metrics,
     init_base_env as _init_base_env,
+    initialize_episode_resources as _initialize_episode_resources,
     layer_init,
     load_orders as _load_orders,
     make_episode_env,
@@ -37,24 +39,31 @@ from agent.training_utils import (  # noqa: E402
 )
 
 
-MODES = ("short", "long", "hybrid")
-ITEM_SCENARIOS = tuple(DEFAULT_PARAMETERS["experiment"].get("item_scenarios", [2, 4, 6, 10]))
-MONTHS = tuple(DEFAULT_PARAMETERS["experiment"].get("months", list(range(1, 13))))
+ITEM_SCENARIOS = tuple(DEFAULT_PARAMETERS["experiment"]["item_scenarios"])
+MONTHS = tuple(DEFAULT_PARAMETERS["experiment"]["months"])
+
+
+def resolve_device(device: str) -> str:
+    if device == "auto":
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    return device
 
 
 def add_common_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     experiment = DEFAULT_PARAMETERS["experiment"]
     paths = DEFAULT_PARAMETERS["paths"]
-    parser.add_argument("--mode", choices=MODES, default=experiment.get("mode", "short"))
-    parser.add_argument("--items", type=int, choices=ITEM_SCENARIOS, default=experiment.get("item_scenario", 2))
-    parser.add_argument("--month", type=int, choices=MONTHS, default=experiment.get("month", 1))
-    parser.add_argument("--episodes", type=int, default=experiment.get("episodes", 3000))
-    parser.add_argument("--seed", type=int, default=experiment.get("seed", 0))
-    parser.add_argument("--output-dir", default=paths.get("baseline_output_dir", "result/baselines"))
-    parser.add_argument("--visdom", action="store_true")
-    parser.add_argument("--action-scale", type=int, default=experiment.get("action_scale", 5))
-    parser.add_argument("--max-days", type=int, default=experiment.get("max_days", 30))
-    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.set_defaults(
+        mode=experiment["mode"],
+        items=experiment["item_scenario"],
+        month=experiment["month"],
+        episodes=experiment["episodes"],
+        seed=experiment["seed"],
+        output_dir=paths["baseline_output_dir"],
+        visdom=experiment["visdom"],
+        action_scale=experiment["action_scale"],
+        max_days=experiment["max_days"],
+        device=resolve_device(experiment["device"]),
+    )
     return parser
 
 
@@ -70,6 +79,27 @@ def best_config_path(args: argparse.Namespace, algorithm: str) -> Path:
 
 load_orders = partial(_load_orders, DEFAULT_PARAMETERS)
 init_base_env = partial(_init_base_env, DEFAULT_PARAMETERS)
+
+
+def initialize_episode_resources(
+    env,
+    mode: str,
+    episode: int,
+    item_count: int,
+    month: int,
+    seed: int,
+    algorithm: str,
+):
+    return _initialize_episode_resources(
+        env,
+        DEFAULT_PARAMETERS,
+        mode,
+        episode,
+        item_count,
+        month,
+        seed,
+        algorithm,
+    )
 
 
 def make_visdom(args: argparse.Namespace, algorithm: str):

@@ -10,65 +10,36 @@ if __package__ in (None, ""):
     repo_root = Path(__file__).resolve().parents[2]
     sys.path.insert(0, str(repo_root))
 
-import torch
-
-from agent.ppo.agent import PPOAgent
-from agent.ppo.networks import PolicyNetwork, ValueNetwork
 from agent.training_utils import (
     CSV_HEADER,
-    MODES,
     best_config_path,
     case_stem,
     collect_metrics,
     collect_resource_config,
     init_base_env,
+    initialize_episode_resources,
     load_orders,
     make_episode_env,
     make_visdom,
     max_decisions,
+    order_instance_path,
     output_paths,
     set_seed,
     step_env,
     write_best_config_csv,
 )
-from environment.class_public import load_config
+from environment.class_public import load_config, print_config_source
 from environment.warehouse_env import WarehouseEnv
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train unified PPO agents for DRL_Warehouse.")
-    parser.add_argument("--config", default=None)
-    parser.add_argument("--mode", choices=MODES, default='hybrid')
-    parser.add_argument("--items", type=int, default=2)
-    parser.add_argument("--month", type=int, default=9)
-    parser.add_argument("--episodes", type=int, default=None)
-    parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--output-dir", default=None)
-    parser.add_argument("--max-days", type=int, default=None)
-    parser.add_argument("--visdom", action="store_true")
-    parser.add_argument("--device", default=None)
     return parser
 
 
-def apply_cli_overrides(parameters: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
-    experiment = parameters["experiment"]
-    paths = parameters["paths"]
-    for name in ("mode", "episodes", "seed", "max_days", "device"):
-        value = getattr(args, name)
-        if value is not None:
-            experiment[name] = value
-    if args.items is not None:
-        experiment["item_scenario"] = args.items
-    if args.month is not None:
-        experiment["month"] = args.month
-    if args.output_dir is not None:
-        paths["ppo_output_dir"] = args.output_dir
-    if args.visdom:
-        experiment["visdom"] = True
-    return parameters
-
-
 def make_networks(env: WarehouseEnv, parameters: dict[str, Any]):
+    from agent.ppo.networks import PolicyNetwork, ValueNetwork
+
     ppo = parameters["ppo"]
     scalar_dim = env.N_a + 1
     action_dim = env.N_a + 1
@@ -77,21 +48,88 @@ def make_networks(env: WarehouseEnv, parameters: dict[str, Any]):
         input_width=env.N_l,
         scalar_dim=scalar_dim,
         output_dim=action_dim,
-        hidden_dim=ppo.get("hidden_dim", 128),
-        feature_dim=ppo.get("feature_dim", 32),
-        attention_heads=ppo.get("attention_heads", 4),
-        initial_log_std=ppo.get("initial_log_std", 0.5),
-        min_log_std=ppo.get("min_log_std", -1.0),
-        max_log_std=ppo.get("max_log_std", 1.0),
+        hidden_dim=ppo["hidden_dim"],
+        feature_dim=ppo["feature_dim"],
+        attention_heads=ppo["attention_heads"],
+        initial_log_std=ppo["initial_log_std"],
+        min_log_std=ppo["min_log_std"],
+        max_log_std=ppo["max_log_std"],
     )
     value = ValueNetwork(
         input_height=env.N_w,
         input_width=env.N_l,
         scalar_dim=scalar_dim,
-        hidden_dim=ppo.get("hidden_dim", 128),
-        feature_dim=ppo.get("feature_dim", 32),
+        hidden_dim=ppo["hidden_dim"],
+        feature_dim=ppo["feature_dim"],
     )
     return policy, value
+
+
+def print_training_parameters(
+    parameters: dict[str, Any],
+    env: WarehouseEnv,
+    decision_limit: int,
+    order_path: Path,
+    csv_path: Path,
+    model_path: Path,
+    best_config_csv_path: Path,
+) -> None:
+    experiment = parameters["experiment"]
+    ppo = parameters["ppo"]
+    warehouse = parameters["warehouse"]
+
+    lines = [
+        "Training parameters:",
+        f"  experiment.mode: {experiment['mode']}",
+        f"  experiment.item_scenario: {experiment['item_scenario']}",
+        f"  experiment.month: {experiment['month']}",
+        f"  experiment.episodes: {experiment['episodes']}",
+        f"  experiment.seed: {experiment['seed']}",
+        f"  experiment.max_days: {experiment['max_days']}",
+        f"  experiment.decision_limit: {decision_limit}",
+        f"  experiment.total_days: {experiment['total_days']}",
+        f"  experiment.work_seconds_per_day: {experiment['work_seconds_per_day']}",
+        f"  experiment.device: {experiment['device']}",
+        f"  experiment.visdom: {experiment['visdom']}",
+    ]
+    if experiment["mode"] == "fixed_hybrid":
+        fixed_hybrid = experiment["fixed_hybrid"]
+        lines.extend(
+            [
+                f"  fixed_hybrid.long_term_robots: {fixed_hybrid['long_term_robots']}",
+                f"  fixed_hybrid.long_term_pickers_area: {fixed_hybrid['long_term_pickers_area']}",
+            ]
+        )
+
+    lines.extend(
+        [
+            f"  paths.orders: {order_path}",
+            f"  paths.ppo_csv: {csv_path}",
+            f"  paths.ppo_model: {model_path}",
+            f"  paths.best_config_csv: {best_config_csv_path}",
+            f"  ppo.learning_rate: {ppo['learning_rate']}",
+            f"  ppo.gamma: {ppo['gamma']}",
+            f"  ppo.batch_size: {ppo['batch_size']}",
+            f"  ppo.n_epochs: {ppo['n_epochs']}",
+            f"  ppo.gae_lambda: {ppo['gae_lambda']}",
+            f"  ppo.clip_range: {ppo['clip_range']}",
+            f"  ppo.initial_entropy_coeff: {ppo['initial_entropy_coeff']}",
+            f"  ppo.min_entropy_coeff: {ppo['min_entropy_coeff']}",
+            f"  ppo.entropy_coeff_decay: {ppo['entropy_coeff_decay']}",
+            f"  ppo.hidden_dim: {ppo['hidden_dim']}",
+            f"  ppo.feature_dim: {ppo['feature_dim']}",
+            f"  ppo.attention_heads: {ppo['attention_heads']}",
+            f"  ppo.initial_log_std: {ppo['initial_log_std']}",
+            f"  ppo.min_log_std: {ppo['min_log_std']}",
+            f"  ppo.max_log_std: {ppo['max_log_std']}",
+            f"  warehouse.area_num: {warehouse['area_num']}",
+            f"  warehouse.aisle_num: {warehouse['aisle_num']}",
+            f"  warehouse.shelf_capacity: {warehouse['shelf_capacity']}",
+            f"  warehouse.shelf_levels: {warehouse['shelf_levels']}",
+            f"  env.total_time: {env.total_time}",
+        ]
+    )
+    print("\n".join(lines))
 
 
 def _done_for_update(mode: str, done: bool) -> bool:
@@ -124,26 +162,41 @@ def _format_update_diagnostics(episode: int, stats: dict[str, float]) -> str:
 
 
 def train(parameters: dict[str, Any]) -> Path:
+    import torch
+
+    from agent.ppo.agent import PPOAgent
+
     experiment = parameters["experiment"]
     mode = experiment["mode"]
     item_count = int(experiment["item_scenario"])
     month = int(experiment["month"])
     episodes = int(experiment["episodes"])
     seed = int(experiment["seed"])
+    decision_limit = max_decisions(mode, int(experiment["max_days"]))
     set_seed(seed)
 
     base_env = init_base_env(parameters)
-    orders = load_orders(parameters, item_count, month)
     policy, value = make_networks(base_env, parameters)
-    agent = PPOAgent(policy, value, parameters=parameters, device=experiment.get("device"))
+    agent = PPOAgent(policy, value, parameters=parameters, device=experiment["device"])
     stem = case_stem(mode, item_count, month, seed)
     csv_path, model_path = output_paths(
         parameters["paths"]["ppo_output_dir"],
         stem,
     )
     best_config_csv_path = best_config_path(parameters["paths"]["ppo_output_dir"], stem)
+    order_path = order_instance_path(parameters, item_count, month)
+    print_training_parameters(
+        parameters,
+        base_env,
+        decision_limit,
+        order_path,
+        csv_path,
+        model_path,
+        best_config_csv_path,
+    )
+    orders = load_orders(parameters, item_count, month)
     viz, viz_win = make_visdom(
-        bool(experiment.get("visdom", False)),
+        bool(experiment["visdom"]),
         "DRL_PPO",
         f"ppo_{stem}",
     )
@@ -158,15 +211,25 @@ def train(parameters: dict[str, Any]) -> Path:
             env, state = make_episode_env(base_env, orders)
             if mode != "long":
                 agent.buffer.clear()
-            done = False
-            episode_config_rows = []
+            state, done, first_decision_index, episode_config_rows = initialize_episode_resources(
+                env,
+                parameters,
+                mode,
+                episode,
+                item_count,
+                month,
+                seed,
+                "ppo",
+            )
+            learned_steps = 0
 
-            for decision in range(max_decisions(mode, int(experiment["max_days"]))):
+            for decision in range(first_decision_index, decision_limit):
                 if done:
                     break
                 action, log_prob, value_estimate, matrix_state, scalar_state = agent.select_action(state)
                 decision_start_time = env.current_time
                 next_state, reward, done = step_env(env, action, mode, decision)
+                learned_steps += 1
                 agent.buffer.add(
                     matrix_state,
                     scalar_state,
@@ -196,7 +259,7 @@ def train(parameters: dict[str, Any]) -> Path:
                 state = next_state
 
             updated = False
-            if _should_update(mode, len(agent.buffer), agent.batch_size, episode, episodes):
+            if learned_steps > 0 and _should_update(mode, len(agent.buffer), agent.batch_size, episode, episodes):
                 updated = agent.update(clear_buffer=(mode != "long"))
             metrics = collect_metrics(env, episode, item_count, month, mode, seed)
             writer.writerow([metrics[key] for key in CSV_HEADER])
@@ -229,8 +292,9 @@ def train(parameters: dict[str, Any]) -> Path:
 
 
 def main() -> None:
-    args = build_parser().parse_args()
-    parameters = apply_cli_overrides(load_config(args.config), args)
+    build_parser().parse_args()
+    print_config_source()
+    parameters = load_config()
     csv_path = train(parameters)
     print(f"Saved PPO metrics to {csv_path}")
 

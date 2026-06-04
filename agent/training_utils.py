@@ -28,7 +28,8 @@ from environment.warehouse_env import WarehouseEnv
 
 
 DEFAULT_PARAMETERS = Config().parameters
-MODES = ("short", "long", "hybrid")
+FIXED_HYBRID_MODE = "fixed_hybrid"
+MODES = ("short", "long", "hybrid", FIXED_HYBRID_MODE)
 CSV_HEADER = [
     "episode",
     "total_cost",
@@ -136,8 +137,7 @@ def load_orders(parameters: dict[str, Any], item_count: int, month: int):
     if not order_path.exists():
         raise FileNotFoundError(
             f"Order file not found: {order_path}. "
-            f"Generate it first with: python -m data.generate_orders "
-            f"--items {item_count} --months {month}"
+            "Generate configured instances first with: python -m data.generate_orders"
         )
     with order_path.open("rb") as f:
         return pickle.load(f)
@@ -160,7 +160,30 @@ def order_total_time(parameters: dict[str, Any], orders) -> int | None:
 
 
 def max_decisions(mode: str, max_days: int) -> int:
+    if mode not in MODES:
+        raise ValueError(f"Unsupported mode: {mode}")
+    if mode == FIXED_HYBRID_MODE and int(max_days) < 2:
+        raise ValueError("fixed_hybrid mode requires max_days >= 2")
     return 1 if mode == "long" else max_days
+
+
+def fixed_hybrid_long_term_action(parameters: dict[str, Any], area_ids: list[str]) -> np.ndarray:
+    fixed_config = parameters["experiment"][FIXED_HYBRID_MODE]
+    robot_count = int(fixed_config["long_term_robots"])
+    picker_counts = list(fixed_config["long_term_pickers_area"])
+    if robot_count < 1:
+        raise ValueError("experiment.fixed_hybrid.long_term_robots must be at least 1")
+    if len(picker_counts) != len(area_ids):
+        raise ValueError(
+            "experiment.fixed_hybrid.long_term_pickers_area length must match "
+            "the number of warehouse areas"
+        )
+    picker_counts = [int(count) for count in picker_counts]
+    if any(count < 1 for count in picker_counts):
+        raise ValueError(
+            "experiment.fixed_hybrid.long_term_pickers_area values must be at least 1"
+        )
+    return np.asarray([robot_count, *picker_counts], dtype=np.float32)
 
 
 def step_env(env: WarehouseEnv, action: np.ndarray, mode: str, decision_index: int):
@@ -168,6 +191,12 @@ def step_env(env: WarehouseEnv, action: np.ndarray, mode: str, decision_index: i
         return env.step(action, first_step=True, pattern="long")
     if mode == "hybrid":
         return env.step(action, first_step=(decision_index == 0))
+    if mode == FIXED_HYBRID_MODE:
+        if decision_index < 1:
+            raise ValueError(
+                "fixed_hybrid decision 0 is reserved for fixed long-term resources"
+            )
+        return env.step(action)
     return env.step(action)
 
 
@@ -323,6 +352,39 @@ def collect_resource_config(
     ):
         row[key] = metrics[key]
     return row
+
+
+def initialize_episode_resources(
+    env: WarehouseEnv,
+    parameters: dict[str, Any],
+    mode: str,
+    episode: int,
+    item_count: int,
+    month: int,
+    seed: int,
+    algorithm: str,
+) -> tuple[dict[str, Any], bool, int, list[dict[str, Any]]]:
+    if mode != FIXED_HYBRID_MODE:
+        return env.state, False, 0, []
+
+    fixed_action = fixed_hybrid_long_term_action(parameters, list(env.area_ids))
+    decision_start_time = env.current_time
+    state, _reward, done = env.step(fixed_action, first_step=True)
+    metrics = collect_metrics(env, episode, item_count, month, mode, seed)
+    config_row = collect_resource_config(
+        env,
+        episode,
+        0,
+        fixed_action,
+        metrics,
+        algorithm,
+        item_count,
+        month,
+        mode,
+        seed,
+        decision_start_time=decision_start_time,
+    )
+    return state, done, 1, [config_row]
 
 
 def write_best_config_csv(path: Path, rows: list[dict[str, Any]]) -> None:

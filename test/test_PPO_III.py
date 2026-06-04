@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import importlib.util
 import argparse
+import contextlib
+import copy
+import io
 import unittest
+from pathlib import Path
 
 
 class RolloutBufferTest(unittest.TestCase):
@@ -23,6 +27,70 @@ class RolloutBufferTest(unittest.TestCase):
         self.assertEqual(buffer.values, [62, 63, 64])
 
 
+class CliConvergenceTest(unittest.TestCase):
+    def test_generate_orders_parser_rejects_default_config_overrides(self):
+        from data.generate_orders import build_parser
+
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(["--output-dir", "data/instances"])
+
+
+class PPOTrainingSummaryTest(unittest.TestCase):
+    def test_training_parameter_summary_includes_core_values(self):
+        from agent.ppo.train import print_training_parameters
+        from environment.class_public import Config
+        from environment.warehouse_env import WarehouseEnv
+
+        parameters = copy.deepcopy(Config().parameters)
+        env = WarehouseEnv()
+        env.total_time = 123
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            print_training_parameters(
+                parameters,
+                env,
+                decision_limit=31,
+                order_path=Path("data/instances/items_2/orders_m09.pkl"),
+                csv_path=Path("result/ppo/fixed_hybrid_i2_m09_seed0.csv"),
+                model_path=Path("result/ppo/fixed_hybrid_i2_m09_seed0.pth"),
+                best_config_csv_path=Path("result/ppo/fixed_hybrid_i2_m09_seed0_best_config.csv"),
+            )
+
+        text = output.getvalue()
+        self.assertIn("Training parameters:", text)
+        self.assertIn("experiment.mode:", text)
+        self.assertIn("experiment.item_scenario:", text)
+        self.assertIn("ppo.learning_rate:", text)
+        self.assertIn("paths.ppo_csv:", text)
+
+    def test_training_parameter_summary_includes_fixed_hybrid_values(self):
+        from agent.ppo.train import print_training_parameters
+        from environment.class_public import Config
+        from environment.warehouse_env import WarehouseEnv
+
+        parameters = copy.deepcopy(Config().parameters)
+        parameters["experiment"]["mode"] = "fixed_hybrid"
+        env = WarehouseEnv()
+        env.total_time = 123
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            print_training_parameters(
+                parameters,
+                env,
+                decision_limit=31,
+                order_path=Path("orders.pkl"),
+                csv_path=Path("metrics.csv"),
+                model_path=Path("model.pth"),
+                best_config_csv_path=Path("best.csv"),
+            )
+
+        text = output.getvalue()
+        self.assertIn("fixed_hybrid.long_term_robots:", text)
+        self.assertIn("fixed_hybrid.long_term_pickers_area:", text)
+
+
 @unittest.skipIf(importlib.util.find_spec("torch") is None, "PyTorch is not installed")
 class PPOCliTest(unittest.TestCase):
     def _make_test_agent(self):
@@ -39,28 +107,33 @@ class PPOCliTest(unittest.TestCase):
         policy, value = make_networks(env, parameters)
         return PPOAgent(policy, value, parameters=parameters, device="cpu"), env, parameters
 
-    def test_parser_accepts_public_interface(self):
+    def test_ppo_parser_rejects_default_config_overrides(self):
         from agent.ppo.train import build_parser
 
-        args = build_parser().parse_args(
-            ["--mode", "short", "--items", "2", "--month", "1", "--episodes", "1", "--seed", "0"]
-        )
-        self.assertEqual(args.mode, "short")
-        self.assertEqual(args.items, 2)
-        self.assertEqual(args.month, 1)
-        self.assertEqual(args.episodes, 1)
-        self.assertEqual(args.seed, 0)
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(["--mode", "fixed_hybrid"])
 
-    def test_baseline_parser_accepts_item_and_month(self):
+    def test_baseline_parser_rejects_default_config_overrides(self):
         from agent.baselines.common import add_common_args
 
         parser = argparse.ArgumentParser()
         add_common_args(parser)
-        args = parser.parse_args(
-            ["--mode", "short", "--items", "2", "--month", "1", "--episodes", "1", "--seed", "0"]
-        )
-        self.assertEqual(args.items, 2)
-        self.assertEqual(args.month, 1)
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["--seed", "0"])
+
+    def test_baseline_parser_uses_default_config_values(self):
+        from agent.baselines.common import add_common_args
+        from environment.class_public import Config
+
+        parser = argparse.ArgumentParser()
+        add_common_args(parser)
+        args = parser.parse_args([])
+        experiment = Config().parameters["experiment"]
+
+        self.assertEqual(args.mode, experiment["mode"])
+        self.assertEqual(args.items, experiment["item_scenario"])
+        self.assertEqual(args.month, experiment["month"])
+        self.assertEqual(args.seed, experiment["seed"])
 
     def test_long_mode_done_for_update_is_one_step(self):
         from agent.ppo.train import _done_for_update
@@ -75,6 +148,8 @@ class PPOCliTest(unittest.TestCase):
         self.assertTrue(_done_for_update("short", True))
         self.assertFalse(_done_for_update("hybrid", False))
         self.assertTrue(_done_for_update("hybrid", True))
+        self.assertFalse(_done_for_update("fixed_hybrid", False))
+        self.assertTrue(_done_for_update("fixed_hybrid", True))
 
     def test_long_mode_update_waits_for_full_sliding_window(self):
         from agent.ppo.train import _should_update
@@ -89,6 +164,7 @@ class PPOCliTest(unittest.TestCase):
 
         self.assertTrue(_should_update("short", buffer_len=0, batch_size=64, episode=1, total_episodes=10))
         self.assertTrue(_should_update("hybrid", buffer_len=0, batch_size=64, episode=1, total_episodes=10))
+        self.assertTrue(_should_update("fixed_hybrid", buffer_len=0, batch_size=64, episode=1, total_episodes=10))
 
     def test_reward_standardization_centers_and_scales_batch(self):
         import torch
