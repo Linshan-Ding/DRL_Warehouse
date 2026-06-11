@@ -6,7 +6,7 @@ Paper Title: **The Impact of Dynamic Workforce Allocation in Human-Robot Collabo
 
 ## Configuration
 
-`configs/default.json` 是项目中已有配置参数的唯一数值来源。训练模式、算例、episode、随机种子、路径、设备、PPO 参数、仓库参数、成本参数和 `fixed_hybrid` 固定长租参数都只能通过修改该文件控制。
+`configs/default.json` 是项目中已有配置参数的唯一数值来源。训练模式、算例、月份轮询开关、episode、随机种子、路径、设备、PPO 参数、仓库参数、成本参数和 `fixed_hybrid` 固定长租参数都只能通过修改该文件控制。
 
 运行入口会打印当前配置来源：
 
@@ -67,6 +67,8 @@ data/instances/items_10/orders_m01.pkl ... orders_m12.pkl
 python -m agent.ppo.train
 ```
 
+将 `experiment.polling_training_enabled` 设为 `true` 后，训练会固定 `experiment.item_scenario`，并按 `experiment.months` 顺序在多个订单月份之间轮询；设为 `false` 时继续使用 `experiment.month` 的单月算例。
+
 ## Train Baselines
 
 baseline 的训练模式、算例、episode、seed、输出目录和设备同样来自 `configs/default.json`。各算法独有超参数仍可通过 CLI 调整：
@@ -96,6 +98,8 @@ short | long | hybrid | fixed_hybrid
 - PPO best resource configuration: `result/ppo/<mode>_i<items>_m<month>_seed<seed>_best_config.csv`
 - Baselines: `result/baselines/<algorithm>_<mode>_i<items>_m<month>_seed<seed>.csv`
 - Baseline best resource configuration: `result/baselines/<algorithm>_<mode>_i<items>_m<month>_seed<seed>_best_config.csv`
+- Polling metrics summary: `<algorithm>_<mode>_i<items>_poll_m01-12_seed<seed>.csv`
+- Polling monthly metrics/best config: `<algorithm>_<mode>_i<items>_poll_m01-12_seed<seed>_m01.csv` 和 `<algorithm>_<mode>_i<items>_poll_m01-12_seed<seed>_m01_best_config.csv`
 
 ## Tests
 

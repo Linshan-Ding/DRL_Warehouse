@@ -15,15 +15,19 @@ from common import (
     SquashedGaussianActor,
     add_common_args,
     best_config_path,
+    close_loggers,
     collect_metrics,
     collect_resource_config,
+    episode_month,
     hard_update,
     init_base_env,
     initialize_episode_resources,
-    load_orders,
+    load_orders_by_month,
     make_episode_env,
-    make_visdom,
+    make_monthly_loggers,
+    make_training_visdom,
     max_decisions,
+    monthly_best_config_paths,
     normalized_to_env_action,
     output_paths,
     print_episode,
@@ -34,6 +38,7 @@ from common import (
     state_to_arrays,
     state_to_tensors,
     step_env,
+    training_months,
     write_best_config_csv,
 )
 
@@ -111,7 +116,8 @@ def main():
     set_seed(args.seed)
     device = torch.device(args.device)
 
-    orders = load_orders(args.items, args.month)
+    months = training_months()
+    orders_by_month = load_orders_by_month(args.items, months)
     base_env = init_base_env()
     decision_limit = max_decisions(args.mode, args.max_days)
     action_dim = base_env.N_a + 1
@@ -134,22 +140,27 @@ def main():
     target_entropy = -float(action_dim)
     buffer = ReplayBuffer(args.buffer_size, matrix_shape, scalar_dim, action_dim)
 
-    csv_path, model_path = output_paths(args, "sac")
-    best_config_csv_path = best_config_path(args, "sac")
+    csv_path, model_path = output_paths(args, "sac", months)
+    best_config_csv_path = best_config_path(args, "sac", months)
+    monthly_best_paths = monthly_best_config_paths(args, "sac", months)
     logger = CsvLogger(csv_path)
-    viz, win = make_visdom(args, "sac")
+    monthly_loggers = make_monthly_loggers(args, "sac", months)
+    viz = make_training_visdom(args, "sac", months)
     best_cost = math.inf
+    monthly_best_cost = {month: math.inf for month in months}
     global_step = 0
 
     try:
         for episode in range(1, args.episodes + 1):
+            current_month = episode_month(months, episode)
+            orders = orders_by_month[current_month]
             env, state = make_episode_env(base_env, orders)
             state, done, first_decision_index, episode_config_rows = initialize_episode_resources(
                 env,
                 args.mode,
                 episode,
                 args.items,
-                args.month,
+                current_month,
                 args.seed,
                 "sac",
             )
@@ -168,7 +179,7 @@ def main():
                 decision_start_time = env.current_time
                 next_state, reward, done = step_env(env, env_action, args.mode, decision)
                 terminal = done or decision == decision_limit - 1
-                decision_metrics = collect_metrics(env, episode, args.items, args.month, args.mode, args.seed)
+                decision_metrics = collect_metrics(env, episode, args.items, current_month, args.mode, args.seed)
                 episode_config_rows.append(
                     collect_resource_config(
                         env,
@@ -178,7 +189,7 @@ def main():
                         decision_metrics,
                         "sac",
                         args.items,
-                        args.month,
+                        current_month,
                         args.mode,
                         args.seed,
                         decision_start_time=decision_start_time,
@@ -210,9 +221,11 @@ def main():
                 if terminal:
                     break
 
-            metrics = collect_metrics(env, episode, args.items, args.month, args.mode, args.seed)
+            metrics = collect_metrics(env, episode, args.items, current_month, args.mode, args.seed)
             logger.write(metrics)
-            viz.line([metrics["total_cost"]], [episode], win=win, update="append")
+            if current_month in monthly_loggers:
+                monthly_loggers[current_month].write(metrics)
+            viz.line_total_cost(metrics)
             print_episode("sac", metrics)
 
             if metrics["total_cost"] < best_cost:
@@ -223,8 +236,12 @@ def main():
                     {**vars(args), "alpha": float(log_alpha.exp().detach().cpu().item())},
                 )
                 write_best_config_csv(best_config_csv_path, episode_config_rows)
+            if current_month in monthly_best_paths and metrics["total_cost"] < monthly_best_cost[current_month]:
+                monthly_best_cost[current_month] = metrics["total_cost"]
+                write_best_config_csv(monthly_best_paths[current_month], episode_config_rows)
     finally:
         logger.close()
+        close_loggers(monthly_loggers)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ import argparse
 import contextlib
 import copy
 import io
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -35,6 +36,129 @@ class CliConvergenceTest(unittest.TestCase):
             build_parser().parse_args(["--output-dir", "data/instances"])
 
 
+class PollingTrainingHelperTest(unittest.TestCase):
+    class _FakeViz:
+        def __init__(self):
+            self.calls = []
+
+        def line(self, y, x, **kwargs):
+            self.calls.append((list(y), list(x), kwargs))
+
+    def test_training_months_uses_single_month_when_polling_disabled(self):
+        from agent.training_utils import training_months
+        from environment.class_public import Config
+
+        parameters = copy.deepcopy(Config().parameters)
+        parameters["experiment"]["polling_training_enabled"] = False
+        parameters["experiment"]["month"] = 9
+        parameters["experiment"]["months"] = [1, 2, 3]
+
+        self.assertEqual(training_months(parameters), [9])
+
+    def test_training_months_uses_month_list_when_polling_enabled(self):
+        from agent.training_utils import training_months
+        from environment.class_public import Config
+
+        parameters = copy.deepcopy(Config().parameters)
+        parameters["experiment"]["polling_training_enabled"] = True
+        parameters["experiment"]["months"] = [1, 2, 3]
+
+        self.assertEqual(training_months(parameters), [1, 2, 3])
+
+    def test_episode_month_cycles_through_months(self):
+        from agent.training_utils import episode_month
+
+        months = [1, 2, 3]
+        mapped = [episode_month(months, episode) for episode in range(1, 6)]
+
+        self.assertEqual(mapped, [1, 2, 3, 1, 2])
+
+    def test_episode_month_counts_assigns_ordered_remainder(self):
+        from agent.training_utils import episode_month_counts
+
+        self.assertEqual(episode_month_counts([1, 2, 3], 5), {1: 2, 2: 2, 3: 1})
+
+    def test_load_orders_by_month_reports_missing_paths(self):
+        from agent.training_utils import load_orders_by_month
+        from environment.class_public import Config
+
+        parameters = copy.deepcopy(Config().parameters)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            parameters["paths"]["instance_dir"] = temp_dir
+
+            with self.assertRaises(FileNotFoundError) as ctx:
+                load_orders_by_month(parameters, item_count=2, months=[1, 2])
+
+        message = str(ctx.exception)
+        self.assertIn("orders_m01.pkl", message)
+        self.assertIn("orders_m02.pkl", message)
+
+    def test_case_stem_marks_polling_months(self):
+        from agent.training_utils import case_stem
+
+        stem = case_stem("fixed_hybrid", 2, 9, 0, polling_months=[1, 2, 3])
+
+        self.assertEqual(stem, "fixed_hybrid_i2_poll_m01-03_seed0")
+
+    def test_disabled_monthly_visdom_has_stable_window_names(self):
+        from agent.training_utils import make_training_visdom
+
+        viz = make_training_visdom(
+            False,
+            "DRL_Test",
+            "ppo_fixed_hybrid_i2_poll_m01-03_seed0",
+            "PPO fixed_hybrid_i2_poll_m01-03_seed0",
+            polling_enabled=True,
+            months=[1, 2, 3],
+        )
+
+        self.assertEqual(
+            viz.window_names(),
+            {
+                1: "ppo_fixed_hybrid_i2_poll_m01-03_seed0_m01",
+                2: "ppo_fixed_hybrid_i2_poll_m01-03_seed0_m02",
+                3: "ppo_fixed_hybrid_i2_poll_m01-03_seed0_m03",
+            },
+        )
+        viz.line_total_cost({"episode": 1, "month": 1, "total_cost": 10})
+
+    def test_monthly_visdom_routes_points_by_training_month(self):
+        from agent.training_utils import TrainingViz
+
+        fake_m01 = self._FakeViz()
+        fake_m02 = self._FakeViz()
+        fake_m03 = self._FakeViz()
+        viz = TrainingViz(
+            monthly={
+                1: (fake_m01, "win_m01"),
+                2: (fake_m02, "win_m02"),
+                3: (fake_m03, "win_m03"),
+            }
+        )
+
+        for episode, month in enumerate([1, 2, 3, 1, 2], start=1):
+            viz.line_total_cost(
+                {"episode": episode, "month": month, "total_cost": episode * 10}
+            )
+
+        self.assertEqual([call[1][0] for call in fake_m01.calls], [1, 4])
+        self.assertEqual([call[1][0] for call in fake_m02.calls], [2, 5])
+        self.assertEqual([call[1][0] for call in fake_m03.calls], [3])
+        self.assertTrue(all(call[2]["update"] == "append" for call in fake_m01.calls))
+
+    def test_single_visdom_routes_all_points_to_default_window(self):
+        from agent.training_utils import TrainingViz
+
+        fake = self._FakeViz()
+        viz = TrainingViz(default=(fake, "single_window"))
+
+        for episode in range(1, 4):
+            viz.line_total_cost({"episode": episode, "month": 9, "total_cost": episode})
+
+        self.assertEqual([call[1][0] for call in fake.calls], [1, 2, 3])
+        self.assertTrue(all(call[2]["win"] == "single_window" for call in fake.calls))
+
+
 class PPOTrainingSummaryTest(unittest.TestCase):
     def test_training_parameter_summary_includes_core_values(self):
         from agent.ppo.train import print_training_parameters
@@ -61,6 +185,7 @@ class PPOTrainingSummaryTest(unittest.TestCase):
         self.assertIn("Training parameters:", text)
         self.assertIn("experiment.mode:", text)
         self.assertIn("experiment.item_scenario:", text)
+        self.assertIn("experiment.polling_training_enabled:", text)
         self.assertIn("ppo.learning_rate:", text)
         self.assertIn("paths.ppo_csv:", text)
 
@@ -89,6 +214,51 @@ class PPOTrainingSummaryTest(unittest.TestCase):
         text = output.getvalue()
         self.assertIn("fixed_hybrid.long_term_robots:", text)
         self.assertIn("fixed_hybrid.long_term_pickers_area:", text)
+
+    def test_training_parameter_summary_includes_polling_values(self):
+        from agent.ppo.train import print_training_parameters
+        from environment.class_public import Config
+        from environment.warehouse_env import WarehouseEnv
+
+        parameters = copy.deepcopy(Config().parameters)
+        parameters["experiment"]["polling_training_enabled"] = True
+        parameters["experiment"]["months"] = [1, 2, 3]
+        parameters["experiment"]["episodes"] = 5
+        env = WarehouseEnv()
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            print_training_parameters(
+                parameters,
+                env,
+                decision_limit=31,
+                order_path={
+                    1: Path("data/instances/items_2/orders_m01.pkl"),
+                    2: Path("data/instances/items_2/orders_m02.pkl"),
+                    3: Path("data/instances/items_2/orders_m03.pkl"),
+                },
+                csv_path=Path("result/ppo/fixed_hybrid_i2_poll_m01-03_seed0.csv"),
+                model_path=Path("result/ppo/fixed_hybrid_i2_poll_m01-03_seed0.pth"),
+                best_config_csv_path=Path("result/ppo/fixed_hybrid_i2_poll_m01-03_seed0_best_config.csv"),
+                polling_months=[1, 2, 3],
+                monthly_csv_paths={
+                    1: Path("result/ppo/fixed_hybrid_i2_poll_m01-03_seed0_m01.csv"),
+                    2: Path("result/ppo/fixed_hybrid_i2_poll_m01-03_seed0_m02.csv"),
+                    3: Path("result/ppo/fixed_hybrid_i2_poll_m01-03_seed0_m03.csv"),
+                },
+                monthly_best_config_paths={
+                    1: Path("result/ppo/fixed_hybrid_i2_poll_m01-03_seed0_m01_best_config.csv"),
+                    2: Path("result/ppo/fixed_hybrid_i2_poll_m01-03_seed0_m02_best_config.csv"),
+                    3: Path("result/ppo/fixed_hybrid_i2_poll_m01-03_seed0_m03_best_config.csv"),
+                },
+            )
+
+        text = output.getvalue()
+        self.assertIn("experiment.polling_training_enabled: True", text)
+        self.assertIn("experiment.polling_months: [1, 2, 3]", text)
+        self.assertIn("polling.month_episode_counts: m01=2, m02=2, m03=1", text)
+        self.assertIn("paths.monthly_csv.m01:", text)
+        self.assertIn("paths.monthly_best_config.m01:", text)
 
 
 @unittest.skipIf(importlib.util.find_spec("torch") is None, "PyTorch is not installed")

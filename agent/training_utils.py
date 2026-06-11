@@ -120,6 +120,18 @@ def best_config_path(output_dir: str | Path, stem: str) -> Path:
     return resolved_dir / f"{stem}_best_config.csv"
 
 
+def monthly_metrics_path(output_dir: str | Path, stem: str, month: int) -> Path:
+    resolved_dir = repo_path(output_dir)
+    resolved_dir.mkdir(parents=True, exist_ok=True)
+    return resolved_dir / f"{stem}_m{int(month):02d}.csv"
+
+
+def monthly_best_config_path(output_dir: str | Path, stem: str, month: int) -> Path:
+    resolved_dir = repo_path(output_dir)
+    resolved_dir.mkdir(parents=True, exist_ok=True)
+    return resolved_dir / f"{stem}_m{int(month):02d}_best_config.csv"
+
+
 def order_instance_path(parameters: dict[str, Any], item_count: int, month: int) -> Path:
     return (
         repo_path(parameters["paths"]["instance_dir"])
@@ -128,8 +140,62 @@ def order_instance_path(parameters: dict[str, Any], item_count: int, month: int)
     )
 
 
-def case_stem(mode: str, item_count: int, month: int, seed: int) -> str:
+def _polling_month_label(months: list[int]) -> str:
+    if not months:
+        raise ValueError("polling months must not be empty")
+    normalized = [int(month) for month in months]
+    first = normalized[0]
+    last = normalized[-1]
+    if normalized == list(range(first, last + 1)):
+        return f"m{first:02d}-{last:02d}"
+    return "_".join(f"m{month:02d}" for month in normalized)
+
+
+def case_stem(
+    mode: str,
+    item_count: int,
+    month: int,
+    seed: int,
+    polling_months: list[int] | None = None,
+) -> str:
+    if polling_months is not None:
+        return f"{mode}_i{item_count}_poll_{_polling_month_label(polling_months)}_seed{seed}"
     return f"{mode}_i{item_count}_m{month:02d}_seed{seed}"
+
+
+def polling_training_enabled(parameters: dict[str, Any]) -> bool:
+    return bool(parameters["experiment"]["polling_training_enabled"])
+
+
+def training_months(parameters: dict[str, Any]) -> list[int]:
+    experiment = parameters["experiment"]
+    if not polling_training_enabled(parameters):
+        return [int(experiment["month"])]
+    months = [int(month) for month in experiment["months"]]
+    if not months:
+        raise ValueError("experiment.months must not be empty when polling training is enabled")
+    return months
+
+
+def episode_month(months: list[int], episode: int) -> int:
+    if not months:
+        raise ValueError("training months must not be empty")
+    if int(episode) < 1:
+        raise ValueError("episode must be 1-based")
+    return int(months[(int(episode) - 1) % len(months)])
+
+
+def episode_month_counts(months: list[int], episodes: int) -> dict[int, int]:
+    if not months:
+        raise ValueError("training months must not be empty")
+    counts = {int(month): 0 for month in months}
+    for episode in range(1, int(episodes) + 1):
+        counts[episode_month(months, episode)] += 1
+    return counts
+
+
+def format_month_counts(counts: dict[int, int]) -> str:
+    return ", ".join(f"m{month:02d}={count}" for month, count in counts.items())
 
 
 def load_orders(parameters: dict[str, Any], item_count: int, month: int):
@@ -141,6 +207,31 @@ def load_orders(parameters: dict[str, Any], item_count: int, month: int):
         )
     with order_path.open("rb") as f:
         return pickle.load(f)
+
+
+def load_orders_by_month(
+    parameters: dict[str, Any],
+    item_count: int,
+    months: list[int],
+) -> dict[int, Any]:
+    order_paths = {
+        int(month): order_instance_path(parameters, item_count, int(month))
+        for month in months
+    }
+    missing_paths = [path for path in order_paths.values() if not path.exists()]
+    if missing_paths:
+        missing_text = "\n  ".join(str(path) for path in missing_paths)
+        raise FileNotFoundError(
+            "Order files not found:\n"
+            f"  {missing_text}\n"
+            "Generate configured instances first with: python -m data.generate_orders"
+        )
+
+    orders_by_month = {}
+    for month, order_path in order_paths.items():
+        with order_path.open("rb") as f:
+            orders_by_month[month] = pickle.load(f)
+    return orders_by_month
 
 
 def init_base_env(parameters: dict[str, Any]) -> WarehouseEnv:
@@ -410,9 +501,54 @@ class CsvLogger:
         self.file.close()
 
 
+def make_monthly_loggers(
+    output_dir: str | Path,
+    stem: str,
+    months: list[int],
+) -> dict[int, CsvLogger]:
+    return {
+        int(month): CsvLogger(monthly_metrics_path(output_dir, stem, int(month)))
+        for month in months
+    }
+
+
+def close_loggers(loggers: dict[int, CsvLogger]) -> None:
+    for logger in loggers.values():
+        logger.close()
+
+
 class NullViz:
     def line(self, *args, **kwargs):
         return None
+
+
+class TrainingViz:
+    def __init__(
+        self,
+        default: tuple[Any, str] | None = None,
+        monthly: dict[int, tuple[Any, str]] | None = None,
+    ):
+        self.default = default
+        self.monthly = monthly or {}
+
+    def line_total_cost(self, metrics: dict[str, Any]) -> None:
+        if self.monthly:
+            month = int(metrics["month"])
+            if month not in self.monthly:
+                return
+            viz, win = self.monthly[month]
+        elif self.default is not None:
+            viz, win = self.default
+        else:
+            return
+        viz.line([metrics["total_cost"]], [metrics["episode"]], win=win, update="append")
+
+    def window_names(self) -> dict[int | str, str]:
+        if self.monthly:
+            return {month: win for month, (_viz, win) in self.monthly.items()}
+        if self.default is None:
+            return {}
+        return {"default": self.default[1]}
 
 
 def make_visdom(enabled: bool, env_name: str, win: str, title: str | None = None):
@@ -432,6 +568,30 @@ def make_visdom(enabled: bool, env_name: str, win: str, title: str | None = None
     except Exception as exc:
         print(f"Visdom disabled: {exc}")
         return NullViz(), win
+
+
+def make_training_visdom(
+    enabled: bool,
+    env_name: str,
+    base_win: str,
+    title_prefix: str,
+    polling_enabled: bool = False,
+    months: list[int] | None = None,
+) -> TrainingViz:
+    if not polling_enabled:
+        return TrainingViz(default=make_visdom(enabled, env_name, base_win, title_prefix))
+    if not months:
+        raise ValueError("months must not be empty when polling Visdom is enabled")
+    monthly = {
+        int(month): make_visdom(
+            enabled,
+            env_name,
+            f"{base_win}_m{int(month):02d}",
+            f"{title_prefix} m{int(month):02d}",
+        )
+        for month in months
+    }
+    return TrainingViz(monthly=monthly)
 
 
 def layer_init(layer: nn.Module, std: float = np.sqrt(2), bias_const: float = 0.0) -> nn.Module:

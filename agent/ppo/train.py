@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import sys
 from pathlib import Path
 from typing import Any
@@ -11,21 +10,30 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(repo_root))
 
 from agent.training_utils import (
-    CSV_HEADER,
+    CsvLogger,
     best_config_path,
     case_stem,
+    close_loggers,
     collect_metrics,
     collect_resource_config,
+    episode_month,
+    episode_month_counts,
+    format_month_counts,
     init_base_env,
     initialize_episode_resources,
-    load_orders,
+    load_orders_by_month,
     make_episode_env,
-    make_visdom,
+    make_monthly_loggers,
+    make_training_visdom,
     max_decisions,
+    monthly_best_config_path,
+    monthly_metrics_path,
     order_instance_path,
     output_paths,
+    polling_training_enabled,
     set_seed,
     step_env,
+    training_months,
     write_best_config_csv,
 )
 from environment.class_public import load_config, print_config_source
@@ -69,20 +77,28 @@ def print_training_parameters(
     parameters: dict[str, Any],
     env: WarehouseEnv,
     decision_limit: int,
-    order_path: Path,
+    order_path: Path | dict[int, Path],
     csv_path: Path,
     model_path: Path,
     best_config_csv_path: Path,
+    polling_months: list[int] | None = None,
+    monthly_csv_paths: dict[int, Path] | None = None,
+    monthly_best_config_paths: dict[int, Path] | None = None,
 ) -> None:
     experiment = parameters["experiment"]
     ppo = parameters["ppo"]
     warehouse = parameters["warehouse"]
+    months = polling_months or training_months(parameters)
+    month_counts = episode_month_counts(months, int(experiment["episodes"]))
 
     lines = [
         "Training parameters:",
         f"  experiment.mode: {experiment['mode']}",
         f"  experiment.item_scenario: {experiment['item_scenario']}",
         f"  experiment.month: {experiment['month']}",
+        f"  experiment.polling_training_enabled: {experiment['polling_training_enabled']}",
+        f"  experiment.polling_months: {months}",
+        f"  polling.month_episode_counts: {format_month_counts(month_counts)}",
         f"  experiment.episodes: {experiment['episodes']}",
         f"  experiment.seed: {experiment['seed']}",
         f"  experiment.max_days: {experiment['max_days']}",
@@ -101,12 +117,33 @@ def print_training_parameters(
             ]
         )
 
+    if isinstance(order_path, dict):
+        order_lines = [
+            f"  paths.orders.m{month:02d}: {path}"
+            for month, path in order_path.items()
+        ]
+    else:
+        order_lines = [f"  paths.orders: {order_path}"]
+    lines.extend(order_lines)
     lines.extend(
         [
-            f"  paths.orders: {order_path}",
             f"  paths.ppo_csv: {csv_path}",
             f"  paths.ppo_model: {model_path}",
             f"  paths.best_config_csv: {best_config_csv_path}",
+        ]
+    )
+    if monthly_csv_paths:
+        lines.extend(
+            f"  paths.monthly_csv.m{month:02d}: {path}"
+            for month, path in monthly_csv_paths.items()
+        )
+    if monthly_best_config_paths:
+        lines.extend(
+            f"  paths.monthly_best_config.m{month:02d}: {path}"
+            for month, path in monthly_best_config_paths.items()
+        )
+    lines.extend(
+        [
             f"  ppo.learning_rate: {ppo['learning_rate']}",
             f"  ppo.gamma: {ppo['gamma']}",
             f"  ppo.batch_size: {ppo['batch_size']}",
@@ -170,6 +207,8 @@ def train(parameters: dict[str, Any]) -> Path:
     mode = experiment["mode"]
     item_count = int(experiment["item_scenario"])
     month = int(experiment["month"])
+    months = training_months(parameters)
+    polling_enabled = polling_training_enabled(parameters)
     episodes = int(experiment["episodes"])
     seed = int(experiment["seed"])
     decision_limit = max_decisions(mode, int(experiment["max_days"]))
@@ -178,36 +217,82 @@ def train(parameters: dict[str, Any]) -> Path:
     base_env = init_base_env(parameters)
     policy, value = make_networks(base_env, parameters)
     agent = PPOAgent(policy, value, parameters=parameters, device=experiment["device"])
-    stem = case_stem(mode, item_count, month, seed)
+    stem = case_stem(
+        mode,
+        item_count,
+        month,
+        seed,
+        polling_months=months if polling_enabled else None,
+    )
     csv_path, model_path = output_paths(
         parameters["paths"]["ppo_output_dir"],
         stem,
     )
     best_config_csv_path = best_config_path(parameters["paths"]["ppo_output_dir"], stem)
-    order_path = order_instance_path(parameters, item_count, month)
+    order_paths = {
+        current_month: order_instance_path(parameters, item_count, current_month)
+        for current_month in months
+    }
+    monthly_csv_paths = (
+        {
+            current_month: monthly_metrics_path(
+                parameters["paths"]["ppo_output_dir"],
+                stem,
+                current_month,
+            )
+            for current_month in months
+        }
+        if polling_enabled
+        else {}
+    )
+    monthly_best_config_paths = (
+        {
+            current_month: monthly_best_config_path(
+                parameters["paths"]["ppo_output_dir"],
+                stem,
+                current_month,
+            )
+            for current_month in months
+        }
+        if polling_enabled
+        else {}
+    )
     print_training_parameters(
         parameters,
         base_env,
         decision_limit,
-        order_path,
+        order_paths if polling_enabled else order_paths[month],
         csv_path,
         model_path,
         best_config_csv_path,
+        polling_months=months,
+        monthly_csv_paths=monthly_csv_paths,
+        monthly_best_config_paths=monthly_best_config_paths,
     )
-    orders = load_orders(parameters, item_count, month)
-    viz, viz_win = make_visdom(
+    orders_by_month = load_orders_by_month(parameters, item_count, months)
+    viz = make_training_visdom(
         bool(experiment["visdom"]),
         "DRL_PPO",
         f"ppo_{stem}",
+        f"PPO {stem}",
+        polling_enabled=polling_enabled,
+        months=months,
     )
 
     best_cost = float("inf")
+    monthly_best_cost = {current_month: float("inf") for current_month in months}
     if mode == "long":
         agent.buffer.clear()
-    with csv_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(CSV_HEADER)
+    logger = CsvLogger(csv_path)
+    monthly_loggers = make_monthly_loggers(
+        parameters["paths"]["ppo_output_dir"],
+        stem,
+        months,
+    ) if polling_enabled else {}
+    try:
         for episode in range(1, episodes + 1):
+            current_month = episode_month(months, episode)
+            orders = orders_by_month[current_month]
             env, state = make_episode_env(base_env, orders)
             if mode != "long":
                 agent.buffer.clear()
@@ -217,7 +302,7 @@ def train(parameters: dict[str, Any]) -> Path:
                 mode,
                 episode,
                 item_count,
-                month,
+                current_month,
                 seed,
                 "ppo",
             )
@@ -240,7 +325,7 @@ def train(parameters: dict[str, Any]) -> Path:
                     value_estimate,
                     maxlen=agent.batch_size if mode == "long" else None,
                 )
-                decision_metrics = collect_metrics(env, episode, item_count, month, mode, seed)
+                decision_metrics = collect_metrics(env, episode, item_count, current_month, mode, seed)
                 episode_config_rows.append(
                     collect_resource_config(
                         env,
@@ -250,7 +335,7 @@ def train(parameters: dict[str, Any]) -> Path:
                         decision_metrics,
                         "ppo",
                         item_count,
-                        month,
+                        current_month,
                         mode,
                         seed,
                         decision_start_time=decision_start_time,
@@ -261,10 +346,11 @@ def train(parameters: dict[str, Any]) -> Path:
             updated = False
             if learned_steps > 0 and _should_update(mode, len(agent.buffer), agent.batch_size, episode, episodes):
                 updated = agent.update(clear_buffer=(mode != "long"))
-            metrics = collect_metrics(env, episode, item_count, month, mode, seed)
-            writer.writerow([metrics[key] for key in CSV_HEADER])
-            f.flush()
-            viz.line([metrics["total_cost"]], [episode], win=viz_win, update="append")
+            metrics = collect_metrics(env, episode, item_count, current_month, mode, seed)
+            logger.write(metrics)
+            if current_month in monthly_loggers:
+                monthly_loggers[current_month].write(metrics)
+            viz.line_total_cost(metrics)
             if updated and agent.last_update_stats:
                 print(_format_update_diagnostics(episode, agent.last_update_stats))
 
@@ -280,6 +366,12 @@ def train(parameters: dict[str, Any]) -> Path:
                     model_path,
                 )
                 write_best_config_csv(best_config_csv_path, episode_config_rows)
+            if (
+                current_month in monthly_best_config_paths
+                and metrics["total_cost"] < monthly_best_cost[current_month]
+            ):
+                monthly_best_cost[current_month] = metrics["total_cost"]
+                write_best_config_csv(monthly_best_config_paths[current_month], episode_config_rows)
 
             print(
                 f"PPO {mode} episode {episode}: "
@@ -287,6 +379,9 @@ def train(parameters: dict[str, Any]) -> Path:
                 f"orders={metrics['completed_orders']}/{metrics['total_orders']}, "
                 f"rate={metrics['completion_rate']:.4f}"
             )
+    finally:
+        logger.close()
+        close_loggers(monthly_loggers)
 
     return csv_path
 

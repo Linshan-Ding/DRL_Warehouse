@@ -63,6 +63,12 @@ def validate_config(parameters: Mapping[str, Any]) -> None:
         raise ValueError("experiment.episodes must be positive")
     if int(experiment["max_days"]) <= 0:
         raise ValueError("experiment.max_days must be positive")
+    if not isinstance(experiment["polling_training_enabled"], bool):
+        raise ValueError("experiment.polling_training_enabled must be a boolean")
+    if not isinstance(experiment["months"], list) or not experiment["months"]:
+        raise ValueError("experiment.months must be a non-empty list")
+    if int(experiment["month"]) not in [int(month) for month in experiment["months"]]:
+        raise ValueError("experiment.month must be included in experiment.months")
     if mode == "fixed_hybrid" and int(experiment["max_days"]) < 2:
         raise ValueError("fixed_hybrid mode requires experiment.max_days >= 2")
 

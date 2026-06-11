@@ -21,20 +21,28 @@ from agent.training_utils import (  # noqa: E402
     CsvLogger,
     best_config_path as _best_config_path,
     case_stem,
+    close_loggers,
     collect_resource_config,
     collect_metrics,
+    episode_month,
     init_base_env as _init_base_env,
     initialize_episode_resources as _initialize_episode_resources,
     layer_init,
     load_orders as _load_orders,
+    load_orders_by_month as _load_orders_by_month,
     make_episode_env,
+    make_monthly_loggers as _make_monthly_loggers,
+    make_training_visdom as _make_training_visdom,
     make_visdom as _make_visdom,
     max_decisions,
+    monthly_best_config_path as _monthly_best_config_path,
     output_paths as _output_paths,
+    polling_training_enabled as _polling_training_enabled,
     print_episode,
     save_checkpoint,
     set_seed,
     step_env,
+    training_months as _training_months,
     write_best_config_csv,
 )
 
@@ -67,17 +75,68 @@ def add_common_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     return parser
 
 
-def output_paths(args: argparse.Namespace, algorithm: str) -> tuple[Path, Path]:
-    stem = f"{algorithm}_{case_stem(args.mode, args.items, args.month, args.seed)}"
+def polling_training_enabled() -> bool:
+    return _polling_training_enabled(DEFAULT_PARAMETERS)
+
+
+def training_months() -> list[int]:
+    return _training_months(DEFAULT_PARAMETERS)
+
+
+def _algorithm_stem(
+    args: argparse.Namespace,
+    algorithm: str,
+    months: list[int] | None = None,
+) -> str:
+    polling_months = months if polling_training_enabled() else None
+    return f"{algorithm}_{case_stem(args.mode, args.items, args.month, args.seed, polling_months=polling_months)}"
+
+
+def output_paths(
+    args: argparse.Namespace,
+    algorithm: str,
+    months: list[int] | None = None,
+) -> tuple[Path, Path]:
+    stem = _algorithm_stem(args, algorithm, months)
     return _output_paths(args.output_dir, stem)
 
 
-def best_config_path(args: argparse.Namespace, algorithm: str) -> Path:
-    stem = f"{algorithm}_{case_stem(args.mode, args.items, args.month, args.seed)}"
+def best_config_path(
+    args: argparse.Namespace,
+    algorithm: str,
+    months: list[int] | None = None,
+) -> Path:
+    stem = _algorithm_stem(args, algorithm, months)
     return _best_config_path(args.output_dir, stem)
 
 
+def monthly_best_config_paths(
+    args: argparse.Namespace,
+    algorithm: str,
+    months: list[int],
+) -> dict[int, Path]:
+    if not polling_training_enabled():
+        return {}
+    stem = _algorithm_stem(args, algorithm, months)
+    return {
+        int(month): _monthly_best_config_path(args.output_dir, stem, int(month))
+        for month in months
+    }
+
+
+def make_monthly_loggers(
+    args: argparse.Namespace,
+    algorithm: str,
+    months: list[int],
+) -> dict[int, CsvLogger]:
+    if not polling_training_enabled():
+        return {}
+    stem = _algorithm_stem(args, algorithm, months)
+    return _make_monthly_loggers(args.output_dir, stem, months)
+
+
 load_orders = partial(_load_orders, DEFAULT_PARAMETERS)
+load_orders_by_month = partial(_load_orders_by_month, DEFAULT_PARAMETERS)
 init_base_env = partial(_init_base_env, DEFAULT_PARAMETERS)
 
 
@@ -103,8 +162,25 @@ def initialize_episode_resources(
 
 
 def make_visdom(args: argparse.Namespace, algorithm: str):
-    win = f"{algorithm}_{case_stem(args.mode, args.items, args.month, args.seed)}"
+    months = training_months()
+    win = _algorithm_stem(args, algorithm, months)
     return _make_visdom(args.visdom, "DRL_Baselines", win)
+
+
+def make_training_visdom(
+    args: argparse.Namespace,
+    algorithm: str,
+    months: list[int],
+):
+    win = _algorithm_stem(args, algorithm, months)
+    return _make_training_visdom(
+        args.visdom,
+        "DRL_Baselines",
+        win,
+        f"{algorithm.upper()} {win}",
+        polling_enabled=polling_training_enabled(),
+        months=months,
+    )
 
 
 def state_to_arrays(state: dict) -> tuple[np.ndarray, np.ndarray]:
